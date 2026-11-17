@@ -64,7 +64,7 @@ void mft_apply_fixups(uint8_t *rec, size_t rec_len, size_t bytes_per_sector) {
 MftRun *mft_parse_runlist(const uint8_t *buf, size_t len, size_t *out_n) {
     *out_n = 0;
     size_t cap = 8, n = 0;
-    MftRun *runs = malloc(cap * sizeof(MftRun));
+    MftRun *runs = (MftRun *)malloc(cap * sizeof(MftRun));
     if (!runs) return NULL;
     int64_t vcn = 0, prev_lcn = 0;
     size_t pos = 0;
@@ -82,7 +82,7 @@ MftRun *mft_parse_runlist(const uint8_t *buf, size_t len, size_t *out_n) {
         pos += off_size;
         if (n == cap) {
             cap *= 2;
-            MftRun *grown = realloc(runs, cap * sizeof(MftRun));
+            MftRun *grown = (MftRun *)realloc(runs, cap * sizeof(MftRun));
             if (!grown) { free(runs); *out_n = 0; return NULL; }
             runs = grown;
         }
@@ -142,7 +142,7 @@ static size_t utf8_encode(uint32_t cp, char *out) {
 
 char *mft_utf16le_to_utf8(const uint8_t *bytes, size_t len) {
     size_t cap = len * 3 / 2 + 8, n = 0;
-    char *out = malloc(cap);
+    char *out = (char *)malloc(cap);
     if (!out) return NULL;
     size_t i = 0;
     while (i + 1 < len) {
@@ -166,7 +166,7 @@ char *mft_utf16le_to_utf8(const uint8_t *bytes, size_t len) {
         size_t w = utf8_encode(cp, tmp);
         if (n + w + 1 > cap) {
             cap *= 2;
-            char *grown = realloc(out, cap);
+            char *grown = (char *)realloc(out, cap);
             if (!grown) { free(out); return NULL; }
             out = grown;
         }

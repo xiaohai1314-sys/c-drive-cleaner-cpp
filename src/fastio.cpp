@@ -6,7 +6,6 @@
  */
 /* _GNU_SOURCE 必须在任何系统头之前：Linux 分支用 O_CLOEXEC /
  * posix_fadvise / pread，-std=c11 下没有 feature 宏会隐式声明。 */
-#define _GNU_SOURCE 1
 #include "fastio.h"
 
 #include <stdio.h>
@@ -112,7 +111,7 @@ CdcFile *cdc_file_open_checked(const char *path, uint64_t frn, uint32_t flags, v
         else
             *actual_size_out = 0;
     }
-    CdcFile *f = malloc(sizeof *f);
+    CdcFile *f = (CdcFile *)malloc(sizeof *f);
     if (!f) {
         CloseHandle(h);
         return NULL;
@@ -218,7 +217,7 @@ CdcFile *cdc_file_open_checked(const char *path, uint64_t frn, uint32_t flags, v
     } else if (actual_size_out) {
         *actual_size_out = 0;
     }
-    CdcFile *f = malloc(sizeof *f);
+    CdcFile *f = (CdcFile *)malloc(sizeof *f);
     if (!f) {
         close(fd);
         return NULL;
@@ -318,7 +317,7 @@ size_t cdc_coalesced_raw_volume_heads(char drive_letter, const CdcRawHeadTarget 
     free(w);
     if (vol == INVALID_HANDLE_VALUE) return 0;
 
-    CdcRawHeadTarget *sorted = malloc(n * sizeof(CdcRawHeadTarget));
+    CdcRawHeadTarget *sorted = (CdcRawHeadTarget *)malloc(n * sizeof(CdcRawHeadTarget));
     if (!sorted) {
         CloseHandle(vol);
         return 0;
@@ -328,7 +327,7 @@ size_t cdc_coalesced_raw_volume_heads(char drive_letter, const CdcRawHeadTarget 
 
     uint64_t max_gap = is_ssd ? 16u * 1024 : 256u * 1024;
     uint64_t max_span = is_ssd ? 256u * 1024 : 512u * 1024;
-    uint8_t *buf = malloc((size_t)max_span);
+    uint8_t *buf = (uint8_t *)malloc((size_t)max_span);
     if (!buf) {
         free(sorted);
         CloseHandle(vol);
@@ -504,8 +503,8 @@ size_t cdc_iocp_read_heads(const CdcIocpRequest *reqs, size_t n, size_t concurre
     /* 上限 128：NVMe 上 SSD 批放宽到 64 在途仍有余量（见 scan.c 调用处）。 */
     if (pool_size > 128) pool_size = 128;
     if (pool_size > n) pool_size = n;
-    IocpSlot *slots = calloc(pool_size, sizeof(IocpSlot));
-    size_t *free_slots = malloc(pool_size * sizeof(size_t));
+    IocpSlot *slots = (IocpSlot *)calloc(pool_size, sizeof(IocpSlot));
+    size_t *free_slots = (size_t *)malloc(pool_size * sizeof(size_t));
     if (!slots || !free_slots) {
         free(slots);
         free(free_slots);
@@ -680,7 +679,7 @@ size_t cdc_iocp_read_heads(const CdcIocpRequest *reqs, size_t n, size_t concurre
                            volatile int *cancel, void (*on_tick)(void *), void *tick_ctx,
                            CdcIocpResult *out) {
     if (n == 0) return 0;
-    uint8_t *valid = calloc(n, sizeof(uint8_t));
+    uint8_t *valid = (uint8_t *)calloc(n, sizeof(uint8_t));
     if (!valid)
         return iocp_linux_sequential(reqs, n, cancel, on_tick, tick_ctx, out);
     IocpLinuxCtx ctx;

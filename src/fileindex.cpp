@@ -9,8 +9,6 @@
  *     （计数类返回 0 即失败/空，与 Rust 的 unwrap_or(0) 同义）。
  */
 #ifndef _WIN32
-#define _POSIX_C_SOURCE 200809L
-#define _DEFAULT_SOURCE 1
 #endif
 
 #include <stdio.h>
@@ -135,7 +133,7 @@ cdc_fileindex_t *cdc_fileindex_open(const char *db_path, cdc_err_t *err) {
         return NULL;
     }
     ensure_parent_dir(db_path);
-    cdc_fileindex_t *idx = calloc(1, sizeof(*idx));
+    cdc_fileindex_t *idx = (cdc_fileindex_t *)calloc(1, sizeof(*idx));
     if (!idx) {
         cdc_err_set(err, CDC_ERR_NOMEM, "分配索引句柄失败");
         return NULL;
@@ -200,7 +198,7 @@ cdc_fileindex_t *cdc_fileindex_open_default(cdc_err_t *err) {
         return NULL;
     }
     size_t need = strlen(dir) + strlen("/file-index-v1.db") + 1;
-    char *path = malloc(need);
+    char *path = (char *)malloc(need);
     if (!path) {
         free(dir);
         cdc_err_set(err, CDC_ERR_NOMEM, "分配索引库路径失败");
@@ -430,8 +428,8 @@ size_t cdc_fileindex_update_path_prefix(cdc_fileindex_t *idx, uint64_t volume_se
     while (olen > 0 && oldp[olen - 1] == '\\') oldp[--olen] = '\0';
     size_t nlen = strlen(newp);
     while (nlen > 0 && newp[nlen - 1] == '\\') newp[--nlen] = '\0';
-    char *old_full = malloc(olen + 2);
-    char *new_full = malloc(nlen + 2);
+    char *old_full = (char *)malloc(olen + 2);
+    char *new_full = (char *)malloc(nlen + 2);
     if (!old_full || !new_full) {
         free(oldp);
         free(newp);
@@ -559,7 +557,7 @@ cdc_index_hash_row_t *cdc_fileindex_rows_needing_full(cdc_fileindex_t *idx,
     }
     sqlite3_finalize(st);
     if (out_n) *out_n = v.len;
-    cdc_index_hash_row_t *arr = v.data;
+    cdc_index_hash_row_t *arr = (cdc_index_hash_row_t *)v.data;
     v.data = NULL; /* 交出所有权：调用方用 cdc_index_hash_rows_free 释放 */
     cdc_vec_free(&v);
     return arr;
@@ -603,7 +601,7 @@ cdc_index_digest_entry_t *cdc_fileindex_all_digests(cdc_fileindex_t *idx,
     }
     sqlite3_finalize(st);
     if (out_n) *out_n = v.len;
-    cdc_index_digest_entry_t *arr = v.data;
+    cdc_index_digest_entry_t *arr = (cdc_index_digest_entry_t *)v.data;
     v.data = NULL; /* 交出所有权：无 owned 指针，调用方直接 free() */
     cdc_vec_free(&v);
     return arr;
@@ -666,7 +664,7 @@ int cdc_fileindex_usn_state_updated_at(cdc_fileindex_t *idx, uint64_t volume_ser
 /* 拼 "?,?,?" 占位串：n 个时返回 malloc 的字符串，调用方 free。 */
 static char *placeholders(size_t n) {
     if (n == 0) return strdup("");
-    char *s = malloc(n * 2); /* "?" + ","，末尾省一个逗号再加 NUL */
+    char *s = (char *)malloc(n * 2); /* "?" + ","，末尾省一个逗号再加 NUL */
     if (!s) return NULL;
     size_t pos = 0;
     for (size_t i = 0; i < n; i++) {
@@ -695,7 +693,7 @@ cdc_index_dup_row_t *cdc_fileindex_query_dup_rows(cdc_fileindex_t *idx,
         " )"
         " ORDER BY size DESC";
     int need = snprintf(NULL, 0, tmpl, ph, ph);
-    char *sql = malloc((size_t)need + 1);
+    char *sql = (char *)malloc((size_t)need + 1);
     if (!sql) {
         free(ph);
         return NULL;
@@ -741,7 +739,7 @@ cdc_index_dup_row_t *cdc_fileindex_query_dup_rows(cdc_fileindex_t *idx,
     }
     sqlite3_finalize(st);
     if (out_n) *out_n = v.len;
-    cdc_index_dup_row_t *arr = v.data;
+    cdc_index_dup_row_t *arr = (cdc_index_dup_row_t *)v.data;
     v.data = NULL; /* 交出所有权：调用方用 cdc_index_dup_rows_free 释放 */
     cdc_vec_free(&v);
     return arr;
@@ -765,7 +763,7 @@ cdc_index_big_row_t *cdc_fileindex_query_big_rows(cdc_fileindex_t *idx,
         " WHERE volume_serial IN (%s) AND size >= ?"
         " ORDER BY size DESC";
     int need = snprintf(NULL, 0, tmpl, ph);
-    char *sql = malloc((size_t)need + 1);
+    char *sql = (char *)malloc((size_t)need + 1);
     if (!sql) {
         free(ph);
         return NULL;
@@ -800,7 +798,7 @@ cdc_index_big_row_t *cdc_fileindex_query_big_rows(cdc_fileindex_t *idx,
     }
     sqlite3_finalize(st);
     if (out_n) *out_n = v.len;
-    cdc_index_big_row_t *arr = v.data;
+    cdc_index_big_row_t *arr = (cdc_index_big_row_t *)v.data;
     v.data = NULL; /* 交出所有权：调用方用 cdc_index_big_rows_free 释放 */
     cdc_vec_free(&v);
     return arr;

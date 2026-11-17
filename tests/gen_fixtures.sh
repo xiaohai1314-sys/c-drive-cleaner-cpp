@@ -3,6 +3,7 @@
 # The fixtures are sparse files (truncate = instant, almost no disk use)
 # and are NOT committed; run this once after checkout.
 set -eu
+mkdir -p "$(dirname "$0")/fixtures"
 cd "$(dirname "$0")/fixtures"
 mkdir -p sub
 truncate -s 60M data.bin

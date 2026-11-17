@@ -20,8 +20,6 @@
  *     full 仍是 BLAKE3，值保持兼容。
  */
 #ifndef _WIN32
-#define _POSIX_C_SOURCE 200809L
-#define _DEFAULT_SOURCE 1
 #endif
 
 #include "hashcache.h"
@@ -65,7 +63,7 @@ struct cdc_hashcache {
 static char *dup_str(const char *s) {
     if (!s) return NULL;
     size_t n = strlen(s) + 1;
-    char *p = malloc(n);
+    char *p = (char *)malloc(n);
     if (p) memcpy(p, s, n);
     return p;
 }
@@ -90,7 +88,7 @@ static long entry_find(const cdc_hashcache_t *c, const char *path, size_t *inser
  * 增长策略仍在 util.c。 */
 static int entry_insert_at(cdc_hashcache_t *c, size_t pos, CdcHashEntry *e) {
     if (cdc_vec_reserve(&c->entries, 1) != CDC_OK) return -1;
-    CdcHashEntry *arr = c->entries.data;
+    CdcHashEntry *arr = (CdcHashEntry *)c->entries.data;
     if (pos < c->entries.len)
         memmove(&arr[pos + 1], &arr[pos],
                 (c->entries.len - pos) * sizeof(CdcHashEntry));
@@ -157,7 +155,7 @@ static int read_file_all(const char *path, char **out, size_t *out_len) {
         fclose(f);
         return -1;
     }
-    char *buf = malloc((size_t)n + 1);
+    char *buf = (char *)malloc((size_t)n + 1);
     if (!buf) {
         fclose(f);
         return -1;
@@ -342,7 +340,7 @@ static void maybe_migrate_legacy(sqlite3 *db) {
 
 static cdc_hashcache_t *load_at(const char *db_path, const char **paths, size_t n,
                                 int migrate_legacy) {
-    cdc_hashcache_t *c = calloc(1, sizeof *c);
+    cdc_hashcache_t *c = (cdc_hashcache_t *)calloc(1, sizeof *c);
     if (!c) return NULL;
     if (cdc_vec_init(&c->entries, sizeof(CdcHashEntry)) != CDC_OK) {
         free(c);
@@ -369,7 +367,7 @@ static cdc_hashcache_t *load_at(const char *db_path, const char **paths, size_t 
      * malloc 失败时退回原顺序：结果正确，只是慢。 */
     const char **sorted = NULL;
     if (n > 1 && paths) {
-        sorted = malloc(n * sizeof(const char *));
+        sorted = (const char **)malloc(n * sizeof(const char *));
         if (sorted) {
             memcpy(sorted, paths, n * sizeof(const char *));
             qsort(sorted, n, sizeof(const char *), cmp_path_ptr);

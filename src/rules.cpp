@@ -822,6 +822,7 @@ static int http_get_https(const char *url, char **out_body, size_t *out_len,
     HINTERNET session = NULL, conn = NULL, req = NULL;
     int rc = CDC_ERR_IO;
     cdc_buf_t body;
+    size_t got_len = 0;
     cdc_buf_init(&body);
     session = WinHttpOpen(L"cdc-rules/1.0",
                           WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
@@ -850,14 +851,15 @@ static int http_get_https(const char *url, char **out_body, size_t *out_len,
             rc = CDC_ERR_NOMEM;
             goto done;
         }
-        DWORD got = 0;
+        DWORD got;
+        got = 0;
         if (!WinHttpReadData(req, body.data + body.len, avail, &got) ||
             got == 0)
             goto done;
         body.len += got;
         if (body.len > CDC_RULES_MAX_BYTES) break;
     }
-    size_t got_len = body.len; /* 先取值：take_cstr 会把 b 重置为 init 状态 */
+    got_len = body.len; /* 先取值：take_cstr 会把 b 重置为 init 状态 */
     *out_body = cdc_buf_take_cstr(&body);
     if (!*out_body) {
         rc = CDC_ERR_NOMEM;

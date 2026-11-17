@@ -46,7 +46,7 @@ int cdc_mft_probe_volume(const wchar_t *drive_letter) {
         fprintf(stderr, "CreateFileW(%ls) failed: %lu\n", path, GetLastError());
         return 1;
     }
-    NTFS_VOLUME_DATA_BUFFER_CDC vd = {0};
+    NTFS_VOLUME_DATA_BUFFER_CDC vd = {};
     DWORD ret = 0;
     BOOL ok = DeviceIoControl(h, FSCTL_GET_NTFS_VOLUME_DATA, NULL, 0,
                               &vd, sizeof vd, &ret, NULL);

@@ -25,7 +25,7 @@
 #include <unistd.h>
 #endif
 
-static cdc_hooks_t g_hooks = { 0 };
+static cdc_hooks_t g_hooks = {};
 
 void cdc_im_set_hooks(const cdc_hooks_t *hooks) {
     if (hooks) {
@@ -682,8 +682,12 @@ int cdc_im_classify(const char *path, const char *root, char **out_kind,
     size_t nparts = 0;
     if (relative_parts(path, root, &parts, &nparts) != CDC_OK) return 0;
     int result = 0;
+    char *ext = NULL;
+    const char *kind = NULL;
+    char *kind_dup = NULL;
+    int is_file_kind = 0;
     if (nparts == 0) goto done;
-    char *ext = ext_of(parts[nparts - 1]);
+    ext = ext_of(parts[nparts - 1]);
     if (ext_in(ext, SKIP_EXT, N_SKIP)) {
         free(ext);
         goto done;
@@ -696,7 +700,7 @@ int cdc_im_classify(const char *path, const char *root, char **out_kind,
         }
     }
     if (cdc_im_is_program_root(root ? root : "")) {
-        const char *kind =
+        kind =
             (strcmp(ext, ".log") == 0 || strcmp(ext, ".xlog") == 0 ||
              strcmp(ext, ".dmp") == 0)
                 ? "log"
@@ -707,8 +711,7 @@ int cdc_im_classify(const char *path, const char *root, char **out_kind,
         result = 1;
         goto done;
     }
-    const char *kind = dir_kind_of(parts, nparts - 1, ext);
-    char *kind_dup = NULL;
+    kind = dir_kind_of(parts, nparts - 1, ext);
     if (kind) {
         kind_dup = strdup(kind);
     } else if (ext[0] == '\0' || strcmp(ext, ".dat") == 0 ||
@@ -734,7 +737,7 @@ int cdc_im_classify(const char *path, const char *root, char **out_kind,
     }
     free(ext);
     if (!kind_dup) goto done;
-    int is_file_kind = strcmp(kind_dup, "file") == 0;
+    is_file_kind = strcmp(kind_dup, "file") == 0;
     if (out_kind) *out_kind = kind_dup;
     else free(kind_dup);
     if (out_sub) {
@@ -1042,7 +1045,7 @@ static void hex_preview(const uint8_t *data, size_t n, cdc_buf_t *out) {
     int first = 1;
     while (offset < total) {
         size_t chunk = total - offset < 16 ? total - offset : 16;
-        char hex[48] = { 0 };
+        char hex[48] = {};
         size_t hp = 0;
         for (size_t i = 0; i < chunk; i++) {
             if (i > 0) hex[hp++] = ' ';

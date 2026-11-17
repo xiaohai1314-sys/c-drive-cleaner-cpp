@@ -16,8 +16,6 @@
  * 只能交叉编译验证；这里的解析器测试覆盖它最容易出错的部分
  * （链式 NextEntryOffset 遍历与 UTF-16LE 名解码）。
  */
-#define _POSIX_C_SOURCE 200809L
-#define _DEFAULT_SOURCE 1
 
 #include <stdio.h>
 #include <stdlib.h>

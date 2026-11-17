@@ -176,7 +176,6 @@ void cdc_usn_change_set_free(CdcUsnChangeSet *s);
 
 /* malloc'd；%LOCALAPPDATA%\C盘清理工具\mftcache（Linux：$LOCALAPPDATA 或 "."）。
  * 目录不存在时创建。实现见 util.c。 */
-char *cdc_cache_dir(void);
 uint64_t cdc_now_seconds(void);
 
 #endif

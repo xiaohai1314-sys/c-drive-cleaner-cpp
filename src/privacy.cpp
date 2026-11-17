@@ -26,7 +26,7 @@
 #include <unistd.h>
 #endif
 
-static cdc_hooks_t g_hooks = { 0 };
+static cdc_hooks_t g_hooks = {};
 
 void cdc_privacy_set_hooks(const cdc_hooks_t *hooks) {
     if (hooks) {

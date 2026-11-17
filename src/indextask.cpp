@@ -8,8 +8,6 @@
  *     用户名，CRT fopen 的 ANSI 路径不可靠）。
  */
 #ifndef _WIN32
-#define _POSIX_C_SOURCE 200809L
-#define _DEFAULT_SOURCE 1
 #endif
 
 #include <stdint.h>
@@ -34,7 +32,7 @@
 char *cdc_indextask_xml_escape(const char *s) {
     if (!s) return strdup("");
     size_t cap = strlen(s) + 1, len = 0;
-    char *out = malloc(cap);
+    char *out = (char *)malloc(cap);
     if (!out) return NULL;
     for (const char *p = s; *p; p++) {
         const char *rep = NULL;
@@ -49,7 +47,7 @@ char *cdc_indextask_xml_escape(const char *s) {
         if (rep) {
             if (len + rlen + 1 > cap) {
                 cap = (len + rlen + 1) * 2;
-                char *np = realloc(out, cap);
+                char *np = (char *)realloc(out, cap);
                 if (!np) {
                     free(out);
                     return NULL;
@@ -61,7 +59,7 @@ char *cdc_indextask_xml_escape(const char *s) {
         } else {
             if (len + 2 > cap) {
                 cap *= 2;
-                char *np = realloc(out, cap);
+                char *np = (char *)realloc(out, cap);
                 if (!np) {
                     free(out);
                     return NULL;
@@ -130,7 +128,7 @@ char *cdc_indextask_next_start_boundary(void) {
     if (om > 12) om = 12;
     if (od < 1) od = 1;
     if (od > 31) od = 31;
-    char *out = malloc(20);
+    char *out = (char *)malloc(20);
     if (!out) return NULL;
     snprintf(out, 20, "%04d-%02d-%02dT03:00:00", oy, om, od);
     return out;
@@ -189,7 +187,7 @@ char *cdc_indextask_build_task_xml(const char *exe_path, const char *user_id,
     }
     int need = snprintf(NULL, 0, TMPL, start_boundary ? start_boundary : "",
                         esc_user, esc_exe);
-    char *out = malloc((size_t)need + 1);
+    char *out = (char *)malloc((size_t)need + 1);
     if (out) {
         snprintf(out, (size_t)need + 1, TMPL, start_boundary ? start_boundary : "",
                  esc_user, esc_exe);
@@ -318,7 +316,7 @@ char *cdc_indextask_decode_task_xml(const unsigned char *bytes, size_t len) {
     if (!bytes) return strdup("");
     if (len >= 2 && bytes[0] == 0xFF && bytes[1] == 0xFE) {
         size_t cap = len + 1, n = 0;
-        char *out = malloc(cap);
+        char *out = (char *)malloc(cap);
         if (!out) return NULL;
         size_t i = 2;
         while (i + 1 < len) {
@@ -340,7 +338,7 @@ char *cdc_indextask_decode_task_xml(const unsigned char *bytes, size_t len) {
             size_t m = utf8_encode(cp, enc);
             if (n + m + 1 > cap) {
                 cap = (n + m + 1) * 2;
-                char *np = realloc(out, cap);
+                char *np = (char *)realloc(out, cap);
                 if (!np) {
                     free(out);
                     return NULL;
@@ -353,7 +351,7 @@ char *cdc_indextask_decode_task_xml(const unsigned char *bytes, size_t len) {
         out[n] = '\0';
         return out;
     }
-    char *out = malloc(len + 1);
+    char *out = (char *)malloc(len + 1);
     if (!out) return NULL;
     memcpy(out, bytes, len);
     out[len] = '\0';
@@ -375,7 +373,7 @@ char *cdc_indextask_current_user_sid(void) {
     GetTokenInformation(token, TokenUser, NULL, 0, &len);
     char *sid_str = NULL;
     if (len > 0) {
-        BYTE *buf = malloc(len);
+        BYTE *buf = (BYTE *)malloc(len);
         if (buf) {
             DWORD got = 0;
             if (GetTokenInformation(token, TokenUser, buf, len, &got)) {
@@ -402,7 +400,7 @@ char *cdc_indextask_current_user_name(void) {
     if (!domain || !*domain) domain = getenv("COMPUTERNAME");
     if (!domain || !*domain) return strdup(user);
     size_t need = strlen(domain) + strlen(user) + 2;
-    char *out = malloc(need);
+    char *out = (char *)malloc(need);
     if (!out) return NULL;
     snprintf(out, need, "%s\\%s", domain, user);
     return out;
@@ -438,7 +436,7 @@ static wchar_t *schtasks_path(void) {
     }
     if (!base) return NULL;
     size_t need = wcslen(base) + wcslen(L"\\System32\\schtasks.exe") + 1;
-    wchar_t *out = malloc(need * sizeof(wchar_t));
+    wchar_t *out = (wchar_t *)malloc(need * sizeof(wchar_t));
     if (!out) {
         free(base);
         return NULL;
@@ -460,7 +458,7 @@ static int run_schtasks_raw(const wchar_t *args, unsigned char **out_bytes,
     wchar_t *exe = schtasks_path();
     if (!exe) return -1;
     size_t cmdlen = wcslen(exe) + wcslen(args) + 4;
-    wchar_t *cmd = malloc(cmdlen * sizeof(wchar_t));
+    wchar_t *cmd = (wchar_t *)malloc(cmdlen * sizeof(wchar_t));
     if (!cmd) {
         free(exe);
         return -1;
@@ -503,7 +501,7 @@ static int run_schtasks_raw(const wchar_t *args, unsigned char **out_bytes,
     CloseHandle(pi.hThread);
 
     size_t cap = 4096, len = 0;
-    unsigned char *buf = malloc(cap);
+    unsigned char *buf = (unsigned char *)malloc(cap);
     if (!buf) {
         CloseHandle(rd);
         return -1;
@@ -511,7 +509,7 @@ static int run_schtasks_raw(const wchar_t *args, unsigned char **out_bytes,
     for (;;) {
         if (len == cap) {
             cap *= 2;
-            unsigned char *np = realloc(buf, cap);
+            unsigned char *np = (unsigned char *)realloc(buf, cap);
             if (!np) {
                 free(buf);
                 CloseHandle(rd);
@@ -593,7 +591,7 @@ static wchar_t *temp_xml_path(void) {
     DWORD n = GetTempPathW(MAX_PATH, dir);
     if (n == 0 || n >= MAX_PATH) return NULL;
     size_t need = wcslen(dir) + strlen(CDC_INDEX_TASK_XML_FILE) + 1;
-    wchar_t *out = malloc(need * sizeof(wchar_t));
+    wchar_t *out = (wchar_t *)malloc(need * sizeof(wchar_t));
     if (!out) return NULL;
     swprintf(out, need, L"%s%hs", dir, CDC_INDEX_TASK_XML_FILE);
     return out;
@@ -634,7 +632,7 @@ int cdc_indextask_register(char *msg, size_t cap, cdc_err_t *err) {
     int rc = -1;
     if (tmp_u8 && cdc_indextask_write_task_xml_utf16(tmp_u8, xml) == 0) {
         size_t arglen = wcslen(tmp_w) + 128;
-        wchar_t *args = malloc(arglen * sizeof(wchar_t));
+        wchar_t *args = (wchar_t *)malloc(arglen * sizeof(wchar_t));
         if (args) {
             swprintf(args, arglen, L"/create /tn \"%s\" /xml \"%s\" /f",
                      CDC_TASK_NAME_W, tmp_w);
@@ -831,7 +829,7 @@ static void test_next_0300(void) {
 static void test_decode_xml(void) {
     const char *xml = "<Task><Description>每日</Description><Enabled>false</Enabled></Task>";
     size_t ulen = strlen(xml);
-    unsigned char *bytes = malloc(2 + ulen * 2);
+    unsigned char *bytes = (unsigned char *)malloc(2 + ulen * 2);
     IT_CHECK(bytes != NULL, "decode alloc");
     if (!bytes) return;
     bytes[0] = 0xFF;
@@ -895,7 +893,7 @@ static void test_write_xml(void) {
     fseek(f, 0, SEEK_END);
     long sz = ftell(f);
     fseek(f, 0, SEEK_SET);
-    unsigned char *bytes = malloc((size_t)(sz > 0 ? sz : 1));
+    unsigned char *bytes = (unsigned char *)malloc((size_t)(sz > 0 ? sz : 1));
     size_t got = bytes ? fread(bytes, 1, (size_t)sz, f) : 0;
     fclose(f);
     IT_CHECK(sz > 2 && bytes[0] == 0xFF && bytes[1] == 0xFE, "xml has utf16le bom");

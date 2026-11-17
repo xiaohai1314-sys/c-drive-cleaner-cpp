@@ -57,7 +57,7 @@ static int vec_grow_raw(void **data, size_t *cap, size_t elem_size, size_t need_
 static char *xstrdup(const char *s) {
     if (!s) return NULL;
     size_t n = strlen(s) + 1;
-    char *p = xmalloc(n);
+    char *p = (char *)xmalloc(n);
     if (p) memcpy(p, s, n);
     return p;
 }
@@ -135,9 +135,9 @@ static uint64_t hash_u64(uint64_t x) {
 static int u64map_init(CdcU64Map *m, size_t cap_hint) {
     size_t cap = 16;
     while (cap < cap_hint * 2 && cap < (1u << 24)) cap *= 2;
-    m->keys = xmalloc(cap * sizeof(uint64_t));
-    m->vals = xmalloc(cap * sizeof(uintptr_t));
-    m->used = xmalloc(cap);
+    m->keys = (uint64_t *)xmalloc(cap * sizeof(uint64_t));
+    m->vals = (uintptr_t *)xmalloc(cap * sizeof(uintptr_t));
+    m->used = (uint8_t *)xmalloc(cap);
     if (!m->keys || !m->vals || !m->used) {
         free(m->keys);
         free(m->vals);
@@ -166,9 +166,9 @@ static void u64map_free(CdcU64Map *m) {
 
 static int u64map_grow(CdcU64Map *m) {
     size_t ncap = m->cap * 2;
-    uint64_t *nkeys = xmalloc(ncap * sizeof(uint64_t));
-    uintptr_t *nvals = xmalloc(ncap * sizeof(uintptr_t));
-    uint8_t *nused = xmalloc(ncap);
+    uint64_t *nkeys = (uint64_t *)xmalloc(ncap * sizeof(uint64_t));
+    uintptr_t *nvals = (uintptr_t *)xmalloc(ncap * sizeof(uintptr_t));
+    uint8_t *nused = (uint8_t *)xmalloc(ncap);
     if (!nkeys || !nvals || !nused) {
         free(nkeys);
         free(nvals);
@@ -287,7 +287,7 @@ static void *thread_entry_posix(void *p) {
 #endif
 
 static void spawn_detached_thread(void (*run)(void *), void *arg) {
-    ThreadThunk *t = xmalloc(sizeof *t);
+    ThreadThunk *t = (ThreadThunk *)xmalloc(sizeof *t);
     if (!t) {
         run(arg); /* OOM：退化为同步执行，保证不丢动作 */
         return;
@@ -322,7 +322,7 @@ static int entry_list_push(CdcFileEntryList *list, CdcFileEntry e) {
         void *data = list->items;
         if (vec_grow_raw(&data, &list->cap, sizeof(CdcFileEntry), list->n) != 0)
             return -1;
-        list->items = data;
+        list->items = (CdcFileEntry *)data;
     }
     list->items[list->n++] = e;
     return 0;
@@ -422,13 +422,13 @@ int cdc_parse_record_in_place(uint8_t *rec, size_t rec_len, uint64_t index,
                     uint64_t parent_ref = 0;
                     if (mft_u64_at(rec, rec_len, v, &parent_ref)) {
                         size_t nlen = rec[v + 64];
-                        uint8_t namespace = rec[v + 65];
+                        uint8_t name_ns = rec[v + 65];
                         size_t noff = v + 66;
                         size_t blen = nlen * 2;
                         if (noff + blen <= pos + attr_len) {
-                            int is_dos = namespace == 2;
+                            int is_dos = name_ns == 2;
                             if (!have_name_span || (name_is_dos && !is_dos) ||
-                                namespace == 0 || namespace == 1) {
+                                name_ns == 0 || name_ns == 1) {
                                 have_name_span = 1;
                                 name_off = noff;
                                 name_byte_len = blen;
@@ -626,7 +626,7 @@ static char *r_str(SnapReader *r) {
         r->err = 1;
         return NULL;
     }
-    char *s = xmalloc(n + 1);
+    char *s = (char *)xmalloc(n + 1);
     if (!s) {
         r->err = 1;
         return NULL;
@@ -641,7 +641,7 @@ static char *r_str(SnapReader *r) {
 
 int cdc_snapshot_save(const char *path, const CdcSnapshot *snap) {
     size_t n = strlen(path) + 5;
-    char *tmp = xmalloc(n);
+    char *tmp = (char *)xmalloc(n);
     if (!tmp) return -1;
     snprintf(tmp, n, "%s.tmp", path);
     FILE *f = fopen(tmp, "wb");
@@ -776,10 +776,10 @@ int cdc_snapshot_load(const char *path, CdcSnapshot *out) {
     fclose(f);
     f = NULL;
     if (r.err) goto fail;
-    out->dirs = dv.data;
+    out->dirs = (CdcDirNode *)dv.data;
     out->n_dirs = dv.len;
     dv.data = NULL; /* 交给 out，vec 不再拥有 */
-    out->files = fv.data;
+    out->files = (CdcRawFile *)fv.data;
     out->n_files = fv.len;
     fv.data = NULL;
     cdc_vec_free(&dv);
@@ -829,7 +829,7 @@ static void snap_internal_free(SnapInternal *s) {
 }
 
 static SnapInternal *snap_internal_from_owned(CdcSnapshot snap) {
-    SnapInternal *s = xmalloc(sizeof *s);
+    SnapInternal *s = (SnapInternal *)xmalloc(sizeof *s);
     if (!s) {
         cdc_snapshot_free(&snap);
         return NULL;
@@ -868,7 +868,7 @@ static int snap_dir_put(SnapInternal *s, CdcDirNode node) {
     if (at == s->dir_cap) {
         void *data = s->snap.dirs;
         if (vec_grow_raw(&data, &s->dir_cap, sizeof(CdcDirNode), at) != 0) return -1;
-        s->snap.dirs = data;
+        s->snap.dirs = (CdcDirNode *)data;
     }
     s->snap.dirs[at] = node;
     s->snap.n_dirs++;
@@ -887,7 +887,7 @@ static int snap_file_put(SnapInternal *s, CdcRawFile f) {
     if (at == s->file_cap) {
         void *data = s->snap.files;
         if (vec_grow_raw(&data, &s->file_cap, sizeof(CdcRawFile), at) != 0) return -1;
-        s->snap.files = data;
+        s->snap.files = (CdcRawFile *)data;
     }
     s->snap.files[at] = f;
     s->snap.n_files++;
@@ -940,8 +940,8 @@ static SnapInternal *snap_clone(const SnapInternal *src) {
     snap.next_usn = src->snap.next_usn;
     snap.min_size = src->snap.min_size;
     snap.bytes_per_cluster = src->snap.bytes_per_cluster;
-    snap.dirs = xmalloc((src->snap.n_dirs ? src->snap.n_dirs : 1) * sizeof(CdcDirNode));
-    snap.files = xmalloc((src->snap.n_files ? src->snap.n_files : 1) * sizeof(CdcRawFile));
+    snap.dirs = (CdcDirNode *)xmalloc((src->snap.n_dirs ? src->snap.n_dirs : 1) * sizeof(CdcDirNode));
+    snap.files = (CdcRawFile *)xmalloc((src->snap.n_files ? src->snap.n_files : 1) * sizeof(CdcRawFile));
     if (!snap.dirs || !snap.files) {
         free(snap.dirs);
         free(snap.files);
@@ -1061,7 +1061,7 @@ static const char *resolve_dir_borrowed(uint64_t frn, SnapInternal *snap,
     uint64_t root_idx = frn & 0xFFFFFFFFFFFFULL;
     if (root_idx == 5) {
         size_t n = strlen(drive) + 2;
-        char *p = xmalloc(n);
+        char *p = (char *)xmalloc(n);
         if (!p) return NULL;
         snprintf(p, n, "%s\\", drive);
         u64map_put(cache, frn, (uintptr_t)p);
@@ -1089,7 +1089,7 @@ static const char *resolve_dir_borrowed(uint64_t frn, SnapInternal *snap,
         if (node->parent_frn == 0 || parent_idx == 5) {
             if (skip_top_at_root && name_in_skip_top(node->name, skip_top, n_skip)) break;
             size_t n = strlen(drive) + 1 + strlen(node->name) + 1;
-            char *b = xmalloc(n);
+            char *b = (char *)xmalloc(n);
             if (!b) break;
             snprintf(b, n, "%s\\%s", drive, node->name);
             u64map_put(cache, cur_frn, (uintptr_t)b);
@@ -1135,7 +1135,7 @@ static const char *resolve_dir_borrowed(uint64_t frn, SnapInternal *snap,
         size_t plen = strlen(path);
         while (plen > 0 && path[plen - 1] == '\\') plen--;
         size_t n = plen + 1 + strlen(node->name) + 1;
-        char *np = xmalloc(n);
+        char *np = (char *)xmalloc(n);
         if (!np) {
             free(path);
             cdc_vec_free(&chain);
@@ -1318,7 +1318,7 @@ static CdcUsnDelta collect_usn_changed_indices(HANDLE h, const UsnJournalData *j
     input.timeout = 0;
     input.bytes_to_wait_for = 0;
     input.usn_journal_id = journal->usn_journal_id;
-    uint8_t *buf = xmalloc(64 * 1024);
+    uint8_t *buf = (uint8_t *)xmalloc(64 * 1024);
     if (!buf) return d;
     CdcU64Map seen;
     memset(&seen, 0, sizeof seen);
@@ -1365,7 +1365,7 @@ static CdcUsnDelta collect_usn_changed_indices(HANDLE h, const UsnJournalData *j
     }
     if (!failed && d.kind != CDC_DELTA_TOO_MANY) {
         d.kind = CDC_DELTA_CHANGED;
-        d.frns = xmalloc((seen.len ? seen.len : 1) * sizeof(uint64_t));
+        d.frns = (uint64_t *)xmalloc((seen.len ? seen.len : 1) * sizeof(uint64_t));
         if (!d.frns) {
             d.kind = CDC_DELTA_FAILED;
         } else {
@@ -1402,7 +1402,7 @@ static int apply_usn_delta(HANDLE h, const uint64_t *changed, size_t n_changed,
                            size_t record_size, size_t bytes_per_sector,
                            size_t bytes_per_cluster, uint64_t min_size,
                            ParsedDeltaList *out) {
-    uint8_t *buf = xmalloc(16 + record_size);
+    uint8_t *buf = (uint8_t *)xmalloc(16 + record_size);
     if (!buf) return -1;
     for (size_t i = 0; i < n_changed; i++) {
         uint64_t idx = changed[i];
@@ -1457,7 +1457,7 @@ static void parse_chunk(const uint8_t *data, size_t len, uint64_t base_idx,
                         size_t record_size, size_t bytes_per_sector,
                         size_t bytes_per_cluster, uint64_t min_size,
                         SnapInternal *out) {
-    uint8_t *scratch = xmalloc(record_size);
+    uint8_t *scratch = (uint8_t *)xmalloc(record_size);
     if (!scratch) return;
     for (size_t off = 0; off + record_size <= len; off += record_size) {
         if (memcmp(data + off, "FILE", 4) != 0) continue;
@@ -1482,10 +1482,10 @@ static int full_mft_read(HANDLE h, const NtfsVolumeData *vol, const MftRun *runs
                                  ? (uint64_t)vol->mft_valid_data_length
                                  : UINT64_MAX;
     const size_t CHUNK = 8 * 1024 * 1024;
-    uint8_t *read_buf = xmalloc(CHUNK);
-    uint8_t *parse_buf = xmalloc(CHUNK);
-    uint8_t *scratch = xmalloc(record_size);
-    uint8_t *carry = xmalloc(record_size);
+    uint8_t *read_buf = (uint8_t *)xmalloc(CHUNK);
+    uint8_t *parse_buf = (uint8_t *)xmalloc(CHUNK);
+    uint8_t *scratch = (uint8_t *)xmalloc(record_size);
+    uint8_t *carry = (uint8_t *)xmalloc(record_size);
     size_t carry_len = 0;
     if (!read_buf || !parse_buf || !scratch || !carry) {
         free(read_buf);
@@ -1589,7 +1589,7 @@ static char *snapshot_path(uint64_t serial) {
     char *dir = cdc_cache_dir();
     if (!dir) return NULL;
     size_t n = strlen(dir) + 32;
-    char *p = xmalloc(n);
+    char *p = (char *)xmalloc(n);
     if (!p) {
         free(dir);
         return NULL;
@@ -1628,7 +1628,7 @@ static void save_snapshot_in_background(const char *path, SnapInternal *snap) {
     save_lock_ensure();
     SnapInternal *copy = snap_clone(snap);
     if (!copy) return;
-    BgSaveArg *a = xmalloc(sizeof *a);
+    BgSaveArg *a = (BgSaveArg *)xmalloc(sizeof *a);
     if (!a) {
         snap_internal_free(copy);
         return;
@@ -1664,7 +1664,7 @@ static void bg_rebuild_run(void *arg) {
         /* 先取 USN 游标再读 MFT：读取期间的变更在下次增量里补上。 */
         UsnJournalData journal;
         int have_journal = query_usn_journal(h, &journal) == 0;
-        uint8_t *first = xmalloc(a->record_size);
+        uint8_t *first = (uint8_t *)xmalloc(a->record_size);
         if (first &&
             read_exact_at(h, a->volume.mft_start_lcn * (int64_t)a->volume.bytes_per_cluster,
                           first, a->record_size) >= a->record_size) {
@@ -1729,7 +1729,7 @@ static void spawn_background_rebuild(const char *volume_path, uint64_t serial,
     }
     g_rebuild_in_progress[g_rebuild_n++] = serial;
     mem_unlock();
-    BgRebuildArg *a = xmalloc(sizeof *a);
+    BgRebuildArg *a = (BgRebuildArg *)xmalloc(sizeof *a);
     if (!a) goto rollback;
     a->volume_path = xstrdup(volume_path);
     a->snap_file = xstrdup(snap_file);
@@ -1963,7 +1963,7 @@ int cdc_mft_try_scan(const char *root, uint64_t min_size,
     }
 
     if (!snap) {
-        uint8_t *first = xmalloc(record_size);
+        uint8_t *first = (uint8_t *)xmalloc(record_size);
         int ok = 0;
         if (first &&
             read_exact_at(h, volume.mft_start_lcn * (int64_t)bytes_per_cluster, first,
@@ -2048,7 +2048,7 @@ int cdc_mft_try_scan(const char *root, uint64_t min_size,
         size_t dl = strlen(dir_path);
         int need_sep = dl == 0 || dir_path[dl - 1] != '\\';
         size_t n = dl + (size_t)(need_sep ? 1 : 0) + strlen(raw->name) + 1;
-        char *full = xmalloc(n);
+        char *full = (char *)xmalloc(n);
         if (!full) {
             rc = -1;
             break;
@@ -2158,7 +2158,7 @@ int cdc_usn_changes_since(const char *root, uint64_t stored_journal_id,
         s.next_usn = borrowed->snap.next_usn;
         s.min_size = borrowed->snap.min_size;
         s.bytes_per_cluster = borrowed->snap.bytes_per_cluster;
-        s.dirs = xmalloc((borrowed->snap.n_dirs ? borrowed->snap.n_dirs : 1) *
+        s.dirs = (CdcDirNode *)xmalloc((borrowed->snap.n_dirs ? borrowed->snap.n_dirs : 1) *
                          sizeof(CdcDirNode));
         if (!s.dirs) {
             usn_delta_free(&changed);
@@ -2364,7 +2364,7 @@ int cdc_usn_changes_since(const char *root, uint64_t stored_journal_id,
             size_t dl = strlen(dir_path);
             int need_sep = dl == 0 || dir_path[dl - 1] != '\\';
             size_t n = dl + (size_t)(need_sep ? 1 : 0) + strlen(raw->name) + 1;
-            char *full = xmalloc(n);
+            char *full = (char *)xmalloc(n);
             if (!full) {
                 rc = -1;
                 break;
@@ -2388,14 +2388,14 @@ int cdc_usn_changes_since(const char *root, uint64_t stored_journal_id,
     }
 
     if (rc == 0) {
-        out->deleted_frns = deleted_v.data;
+        out->deleted_frns = (uint64_t *)deleted_v.data;
         out->n_deleted = deleted_v.len;
         deleted_v.data = NULL; /* 交给 out */
-        out->files = files_v.data;
+        out->files = (CdcUsnChangedFile *)files_v.data;
         out->n_files = files_v.len;
         files_v.data = NULL;
-        out->renamed_old = ren_old_v.data;
-        out->renamed_new = ren_new_v.data;
+        out->renamed_old = (char **)ren_old_v.data;
+        out->renamed_new = (char **)ren_new_v.data;
         out->n_renamed = ren_old_v.len;
         ren_old_v.data = NULL;
         ren_new_v.data = NULL;
@@ -2505,7 +2505,7 @@ static char *join_path(const char *dir, const char *name) {
     size_t dl = strlen(dir);
     int need_sep = dl == 0 || (dir[dl - 1] != '/' && dir[dl - 1] != '\\');
     size_t n = dl + (size_t)(need_sep ? 1 : 0) + strlen(name) + 1;
-    char *p = xmalloc(n);
+    char *p = (char *)xmalloc(n);
     if (!p) return NULL;
     if (need_sep)
         snprintf(p, n, "%s/%s", dir, name);

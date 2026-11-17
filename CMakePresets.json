@@ -1,1 +1,22 @@
-{"buildPresets":[{"configurePreset":"native","name":"native"},{"configurePreset":"mingw64","name":"mingw64"}],"cmakeMinimumRequired":{"major":3,"minor":19,"patch":0},"configurePresets":[{"binaryDir":"out/build/native","cacheVariables":{"CMAKE_BUILD_TYPE":"Release"},"displayName":"Linux native (gcc)","name":"native"},{"binaryDir":"out/build/mingw64","cacheVariables":{"CMAKE_BUILD_TYPE":"Release"},"displayName":"Windows x64 (llvm-mingw cross)","name":"mingw64","toolchainFile":"cmake/toolchain-mingw64.cmake"}],"testPresets":[{"configurePreset":"native","name":"native","output":{"outputOnFailure":true}}],"version":3}
+{
+  "version": 3,
+  "cmakeMinimumRequired": {"major": 3, "minor": 20, "patch": 0},
+  "configurePresets": [
+    {"name": "native", "displayName": "Linux native", "binaryDir": "out/build/native",
+     "generator": "Ninja", "cacheVariables": {"CMAKE_BUILD_TYPE": "Release"}},
+    {"name": "mingw64", "displayName": "Windows x64 (MinGW cross)", "binaryDir": "out/build/mingw64",
+     "generator": "Ninja", "toolchainFile": "cmake/toolchain-mingw64.cmake",
+     "cacheVariables": {"CMAKE_BUILD_TYPE": "Release"}},
+    {"name": "msvc", "displayName": "Windows x64 (MSVC)", "binaryDir": "out/build/msvc",
+     "generator": "Visual Studio 17 2022", "architecture": "x64"}
+  ],
+  "buildPresets": [
+    {"name": "native", "configurePreset": "native"},
+    {"name": "mingw64", "configurePreset": "mingw64"},
+    {"name": "msvc", "configurePreset": "msvc", "configuration": "Release"}
+  ],
+  "testPresets": [
+    {"name": "native", "configurePreset": "native", "output": {"outputOnFailure": true}},
+    {"name": "msvc", "configurePreset": "msvc", "configuration": "Release", "output": {"outputOnFailure": true}}
+  ]
+}

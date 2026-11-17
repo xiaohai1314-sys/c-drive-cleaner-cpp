@@ -20,7 +20,6 @@ char *cdc_app_data_dir(void);
 
 /* 缓存目录 %LOCALAPPDATA%\C盘清理工具\mftcache（不存在则创建）。
  * 调用方 free()。实现在 util.c（不要在这里另写实现）。 */
-char *cdc_cache_dir(void);
 
 /* 日志目录 %LOCALAPPDATA%\C盘清理工具\logs（不存在则创建）。
  * 调用方 free()。 */

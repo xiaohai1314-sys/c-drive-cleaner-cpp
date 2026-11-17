@@ -6,8 +6,6 @@
  * 转换都是精确的；非法输入按头文件约定的策略处理。
  */
 #ifndef _WIN32
-#define _POSIX_C_SOURCE 200809L
-#define _DEFAULT_SOURCE 1
 #endif
 
 #include "util.h"

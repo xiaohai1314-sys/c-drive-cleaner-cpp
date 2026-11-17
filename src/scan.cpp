@@ -21,8 +21,6 @@
  * run_dup_pipeline 消费输入数组（元素或被移走或被释放，数组外壳由它 free）。
  */
 #ifndef _WIN32
-#define _POSIX_C_SOURCE 200809L
-#define _DEFAULT_SOURCE 1
 #endif
 
 #include "scan.h"
@@ -50,7 +48,7 @@
 static char *dup_str(const char *s) {
     if (!s) return NULL;
     size_t n = strlen(s) + 1;
-    char *p = malloc(n);
+    char *p = (char *)malloc(n);
     if (p) memcpy(p, s, n);
     return p;
 }
@@ -168,7 +166,7 @@ static int whole_file_xxh_by_frn(const char *path, uint64_t frn, uint64_t size,
     CdcFile *f = open_checked_with_size(path, frn, CDC_FILE_FLAG_SEQUENTIAL_SCAN,
                                         &hid, &id, &actual);
     if (!f) return -1;
-    uint8_t *buf = malloc(CDC_SCAN_FULL_BUF_SIZE);
+    uint8_t *buf = (uint8_t *)malloc(CDC_SCAN_FULL_BUF_SIZE);
     if (!buf) {
         cdc_file_close(f);
         return -1;
@@ -217,7 +215,7 @@ static int full_hash_by_frn(const char *path, uint64_t frn, uint8_t digest[32],
     if (!f) return -1;
     size_t buflen = actual >= CDC_SCAN_FULL_LARGE_THRESHOLD ? CDC_SCAN_FULL_BUF_LARGE
                                                             : CDC_SCAN_FULL_BUF_SIZE;
-    uint8_t *buf = malloc(buflen);
+    uint8_t *buf = (uint8_t *)malloc(buflen);
     if (!buf) {
         cdc_file_close(f);
         return -1;
@@ -265,7 +263,7 @@ static int sample_hash_by_frn(const char *path, uint64_t frn, uint64_t size,
     CdcFile *f = open_checked_with_size(path, frn, CDC_FILE_FLAG_RANDOM_ACCESS,
                                         &hid, &id, &actual);
     if (!f) return -1;
-    uint8_t *buf = malloc((size_t)CDC_SCAN_SAMPLE_CHUNK);
+    uint8_t *buf = (uint8_t *)malloc((size_t)CDC_SCAN_SAMPLE_CHUNK);
     if (!buf) {
         cdc_file_close(f);
         return -1;
@@ -310,7 +308,7 @@ static int strong_hash_by_frn(const char *path, uint64_t frn, uint64_t size,
     CdcFile *f = open_checked_with_size(path, frn, CDC_FILE_FLAG_RANDOM_ACCESS,
                                         &hid, &id, &actual);
     if (!f) return -1;
-    uint8_t *buf = malloc((size_t)CDC_SCAN_STRONG_CHUNK);
+    uint8_t *buf = (uint8_t *)malloc((size_t)CDC_SCAN_STRONG_CHUNK);
     if (!buf) {
         cdc_file_close(f);
         return -1;
@@ -352,7 +350,7 @@ static int probe_hash_by_frn(const char *path, uint64_t frn, uint64_t size,
     CdcFile *f = open_checked_with_size(path, frn, CDC_FILE_FLAG_RANDOM_ACCESS,
                                         &hid, &id, &actual);
     if (!f) return -1;
-    uint8_t *buf = malloc((size_t)CDC_SCAN_PROBE_CHUNK);
+    uint8_t *buf = (uint8_t *)malloc((size_t)CDC_SCAN_PROBE_CHUNK);
     if (!buf) {
         cdc_file_close(f);
         return -1;
@@ -398,7 +396,7 @@ static int read_hdd_seq_sample_and_full(const char *path, uint64_t frn, uint64_t
         return -1;
     }
     size_t s = (size_t)actual;
-    uint8_t *buf = malloc(s ? s : 1);
+    uint8_t *buf = (uint8_t *)malloc(s ? s : 1);
     if (!buf) {
         cdc_file_close(f);
         return -1;
@@ -554,7 +552,7 @@ static int cand_any_digest(const DupCandidate *c) {
 
 /* 调度排序：SSD 在前，同盘按 sort_key，再按 path（确定性顺序）。 */
 static int cmp_cand_schedule(const void *a, const void *b) {
-    const DupCandidate *x = a, *y = b;
+    const DupCandidate *x = (const DupCandidate *)a, *y = (const DupCandidate *)b;
     if (x->is_ssd != y->is_ssd) return x->is_ssd ? -1 : 1;
     int c = cmp_disk_key(&x->disk, &y->disk);
     if (c) return c;
@@ -563,13 +561,13 @@ static int cmp_cand_schedule(const void *a, const void *b) {
 }
 
 static int cmp_cand_by_size(const void *a, const void *b) {
-    const DupCandidate *x = a, *y = b;
+    const DupCandidate *x = (const DupCandidate *)a, *y = (const DupCandidate *)b;
     if (x->size != y->size) return x->size < y->size ? -1 : 1;
     return strcmp(x->path, y->path);
 }
 
 static int cmp_cand_by_head(const void *a, const void *b) {
-    const DupCandidate *x = a, *y = b;
+    const DupCandidate *x = (const DupCandidate *)a, *y = (const DupCandidate *)b;
     if (x->size != y->size) return x->size < y->size ? -1 : 1;
     if (x->digests.head_xxh != y->digests.head_xxh)
         return x->digests.head_xxh < y->digests.head_xxh ? -1 : 1;
@@ -577,7 +575,7 @@ static int cmp_cand_by_head(const void *a, const void *b) {
 }
 
 static int cmp_cand_by_sample(const void *a, const void *b) {
-    const DupCandidate *x = a, *y = b;
+    const DupCandidate *x = (const DupCandidate *)a, *y = (const DupCandidate *)b;
     if (x->size != y->size) return x->size < y->size ? -1 : 1;
     if (x->digests.sample_xxh != y->digests.sample_xxh)
         return x->digests.sample_xxh < y->digests.sample_xxh ? -1 : 1;
@@ -585,14 +583,14 @@ static int cmp_cand_by_sample(const void *a, const void *b) {
 }
 
 static int cmp_cand_by_probe(const void *a, const void *b) {
-    const DupCandidate *x = a, *y = b;
+    const DupCandidate *x = (const DupCandidate *)a, *y = (const DupCandidate *)b;
     if (x->size != y->size) return x->size < y->size ? -1 : 1;
     if (x->probe_xxh != y->probe_xxh) return x->probe_xxh < y->probe_xxh ? -1 : 1;
     return strcmp(x->path, y->path);
 }
 
 static int cmp_cand_by_full(const void *a, const void *b) {
-    const DupCandidate *x = a, *y = b;
+    const DupCandidate *x = (const DupCandidate *)a, *y = (const DupCandidate *)b;
     if (x->size != y->size) return x->size < y->size ? -1 : 1;
     int c = memcmp(x->digests.full.bytes, y->digests.full.bytes, 32);
     if (c) return c;
@@ -600,7 +598,7 @@ static int cmp_cand_by_full(const void *a, const void *b) {
 }
 
 static int cmp_cand_by_strong(const void *a, const void *b) {
-    const DupCandidate *x = a, *y = b;
+    const DupCandidate *x = (const DupCandidate *)a, *y = (const DupCandidate *)b;
     if (x->size != y->size) return x->size < y->size ? -1 : 1;
     if (x->digests.strong_xxh != y->digests.strong_xxh)
         return x->digests.strong_xxh < y->digests.strong_xxh ? -1 : 1;
@@ -880,9 +878,9 @@ static int run_dup_pipeline(DupCandidate *items, size_t n, const char *label,
                     char letter;
                     CdcRawHeadTarget target;
                 } RawPair;
-                RawPair *pairs = malloc(n_raw * sizeof(RawPair));
-                CdcRawHeadTarget *targets = malloc(n_raw * sizeof(CdcRawHeadTarget));
-                CdcHeadResult *results = malloc(n_raw * sizeof(CdcHeadResult));
+                RawPair *pairs = (RawPair *)malloc(n_raw * sizeof(RawPair));
+                CdcRawHeadTarget *targets = (CdcRawHeadTarget *)malloc(n_raw * sizeof(CdcRawHeadTarget));
+                CdcHeadResult *results = (CdcHeadResult *)malloc(n_raw * sizeof(CdcHeadResult));
                 if (pairs && targets && results) {
                     size_t t = 0;
                     for (size_t i = 0; i < n; i++) {
@@ -965,8 +963,8 @@ static int run_dup_pipeline(DupCandidate *items, size_t n, const char *label,
                 }
             }
             if (n_ssd > 0 || n_hdd > 0) {
-                CdcIocpRequest *reqs = malloc((n_ssd + n_hdd) * sizeof(CdcIocpRequest));
-                CdcIocpResult *res = malloc((n_ssd + n_hdd) * sizeof(CdcIocpResult));
+                CdcIocpRequest *reqs = (CdcIocpRequest *)malloc((n_ssd + n_hdd) * sizeof(CdcIocpRequest));
+                CdcIocpResult *res = (CdcIocpResult *)malloc((n_ssd + n_hdd) * sizeof(CdcIocpResult));
                 if (reqs && res) {
                     size_t s = 0, h = 0;
                     /* SSD 在前（调度序已排好：SSD 段在前）。 */
@@ -1305,7 +1303,7 @@ static int big_file_list_push(CdcBigFileList *list, CdcBigFile e) {
         void *data = list->items;
         if (list_grow_raw(&data, &list->cap, sizeof(CdcBigFile), list->n) != 0)
             return -1;
-        list->items = data;
+        list->items = (CdcBigFile *)data;
     }
     list->items[list->n++] = e;
     return 0;
@@ -1316,7 +1314,7 @@ static int dup_group_list_push(CdcDupGroupList *list, CdcDupGroup g) {
         void *data = list->items;
         if (list_grow_raw(&data, &list->cap, sizeof(CdcDupGroup), list->n) != 0)
             return -1;
-        list->items = data;
+        list->items = (CdcDupGroup *)data;
     }
     list->items[list->n++] = g;
     return 0;
@@ -1381,11 +1379,11 @@ static int run_dup_pipelines(cdc_vec_t *ssd_stage1, cdc_vec_t *mixed_stage1,
         cand_vec_free_all(mixed_stage1);
         return -1;
     }
-    DupCandidate *sarr = ssd_stage1->data;
+    DupCandidate *sarr = (DupCandidate *)ssd_stage1->data;
     size_t sn = ssd_stage1->len;
     ssd_stage1->data = NULL;
     ssd_stage1->len = ssd_stage1->cap = 0;
-    DupCandidate *marr = mixed_stage1->data;
+    DupCandidate *marr = (DupCandidate *)mixed_stage1->data;
     size_t mn = mixed_stage1->len;
     mixed_stage1->data = NULL;
     mixed_stage1->len = mixed_stage1->cap = 0;
@@ -1394,10 +1392,10 @@ static int run_dup_pipelines(cdc_vec_t *ssd_stage1, cdc_vec_t *mixed_stage1,
     if (run_dup_pipeline(marr, mn, mixed_label, opts, &mixed_final, &mixed_elim) != 0)
         rc = -1;
     if (rc == 0) {
-        flush_candidate_hashes(cache, ssd_elim.data, ssd_elim.len, now);
-        flush_candidate_hashes(cache, ssd_final.data, ssd_final.len, now);
-        flush_candidate_hashes(cache, mixed_elim.data, mixed_elim.len, now);
-        flush_candidate_hashes(cache, mixed_final.data, mixed_final.len, now);
+        flush_candidate_hashes(cache, (const DupCandidate *)ssd_elim.data, ssd_elim.len, now);
+        flush_candidate_hashes(cache, (const DupCandidate *)ssd_final.data, ssd_final.len, now);
+        flush_candidate_hashes(cache, (const DupCandidate *)mixed_elim.data, mixed_elim.len, now);
+        flush_candidate_hashes(cache, (const DupCandidate *)mixed_final.data, mixed_final.len, now);
         if (cache) cdc_hashcache_save_dirty(cache);
         if (cand_vec_move_all(out_final, &ssd_final) != 0) rc = -1;
         else if (cand_vec_move_all(out_final, &mixed_final) != 0) rc = -1;
@@ -1432,12 +1430,12 @@ static void final_digest_hex(const DupCandidate *c, int fast, char out[65]) {
 }
 
 static int cmp_cand_by_path(const void *a, const void *b) {
-    const DupCandidate *x = a, *y = b;
+    const DupCandidate *x = (const DupCandidate *)a, *y = (const DupCandidate *)b;
     return strcmp(x->path, y->path);
 }
 
 static int cmp_dup_group(const void *a, const void *b) {
-    const CdcDupGroup *x = a, *y = b;
+    const CdcDupGroup *x = (const CdcDupGroup *)a, *y = (const CdcDupGroup *)b;
     uint64_t left = x->size * (uint64_t)x->n_files;
     uint64_t right = y->size * (uint64_t)y->n_files;
     if (left != right) return left < right ? 1 : -1; /* size×count 降序 */
@@ -1497,8 +1495,8 @@ static int build_dup_groups(DupCandidate *items, size_t n, int fast,
                 memset(&g, 0, sizeof g);
                 final_digest_hex(&items[i], fast, g.hash_hex);
                 g.size = items[i].size;
-                g.files = malloc(kept * sizeof(char *));
-                g.mtimes = malloc(kept * sizeof(uint64_t));
+                g.files = (char **)malloc(kept * sizeof(char *));
+                g.mtimes = (uint64_t *)malloc(kept * sizeof(uint64_t));
                 if (!g.files || !g.mtimes) {
                     free(g.files);
                     free(g.mtimes);
@@ -1546,7 +1544,7 @@ int cdc_scan_hash_groups(const cdc_scan_input_t *inputs, size_t n,
     memset(&opts, 0, sizeof opts);
     opts.fast = 0;
     opts.trace = 0;
-    DupCandidate *cands = malloc(n * sizeof(DupCandidate));
+    DupCandidate *cands = (DupCandidate *)malloc(n * sizeof(DupCandidate));
     if (!cands) return -1;
     size_t nc = 0;
     CdcDiskCache dcache;
@@ -1684,7 +1682,7 @@ int cdc_scan_hash_groups(const cdc_scan_input_t *inputs, size_t n,
     }
     size_t n_upd = updates.len;
     if (out_updates) {
-        *out_updates = updates.data;
+        *out_updates = (cdc_digest_update_t *)updates.data;
         updates.data = NULL;
         updates.len = 0;
     }
@@ -1696,13 +1694,13 @@ int cdc_scan_hash_groups(const cdc_scan_input_t *inputs, size_t n,
 /* ---------------- 实时扫描入口 ---------------- */
 
 static int cmp_entry_by_size(const void *a, const void *b) {
-    const CdcFileEntry *x = a, *y = b;
+    const CdcFileEntry *x = (const CdcFileEntry *)a, *y = (const CdcFileEntry *)b;
     if (x->size != y->size) return x->size < y->size ? -1 : 1;
     return strcmp(x->path, y->path);
 }
 
 static int cmp_big_file(const void *a, const void *b) {
-    const CdcBigFile *x = a, *y = b;
+    const CdcBigFile *x = (const CdcBigFile *)a, *y = (const CdcBigFile *)b;
     if (x->size != y->size) return x->size < y->size ? 1 : -1; /* size 降序 */
     return strcmp(x->path, y->path);
 }
@@ -1847,7 +1845,7 @@ int cdc_scan_dups(const char **roots, size_t n_roots, uint64_t min_size,
                     free(e.path);
                     continue;
                 }
-                all.items = data;
+                all.items = (CdcFileEntry *)data;
                 all.cap = cap;
             }
             all.items[all.n++] = e;
@@ -1876,7 +1874,7 @@ int cdc_scan_dups(const char **roots, size_t n_roots, uint64_t min_size,
         return 0;
     }
     /* 缓存预加载（只加载候选路径）。 */
-    const char **paths = malloc(candidates_count * sizeof(char *));
+    const char **paths = (const char **)malloc(candidates_count * sizeof(char *));
     cdc_hashcache_t *cache = NULL;
     if (paths) {
         size_t p = 0;
@@ -1893,7 +1891,7 @@ int cdc_scan_dups(const char **roots, size_t n_roots, uint64_t min_size,
         free(paths);
     }
     uint64_t stamp_now = cdc_now_seconds();
-    DupCandidate *cands = malloc(candidates_count * sizeof(DupCandidate));
+    DupCandidate *cands = (DupCandidate *)malloc(candidates_count * sizeof(DupCandidate));
     if (!cands) {
         cdc_file_entry_list_free(&all);
         if (cache) cdc_hashcache_close(cache);
@@ -1944,7 +1942,7 @@ int cdc_scan_dups(const char **roots, size_t n_roots, uint64_t min_size,
     }
     free(cands);
     if (ssd_stage1.len == 0 && mixed_stage1.len == 0) {
-        DupCandidate *rarr = ready.data;
+        DupCandidate *rarr = (DupCandidate *)ready.data;
         size_t rn = ready.len;
         ready.data = NULL;
         ready.len = ready.cap = 0;
@@ -1998,7 +1996,7 @@ int cdc_scan_dups(const char **roots, size_t n_roots, uint64_t min_size,
     }
     cand_vec_free_all(&final_items);
     {
-        DupCandidate *rarr = ready.data;
+        DupCandidate *rarr = (DupCandidate *)ready.data;
         size_t rn = ready.len;
         ready.data = NULL;
         ready.len = ready.cap = 0;

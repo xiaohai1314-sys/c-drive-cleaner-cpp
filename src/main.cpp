@@ -24,8 +24,6 @@
  * 启动时 recover_pending_move()——Rust main() 里有，C 版尚未决定。
  */
 #ifndef _WIN32
-#define _POSIX_C_SOURCE 200809L
-#define _DEFAULT_SOURCE 1
 #endif
 
 #include <stdio.h>
@@ -186,7 +184,7 @@ static size_t nrows = 0, caprows = 0;
 static void add_row(const char *path, uint64_t size) {
     if (nrows == caprows) {
         caprows = caprows ? caprows * 2 : 256;
-        rows = realloc(rows, caprows * sizeof(BigRow));
+        rows = (BigRow *)realloc(rows, caprows * sizeof(BigRow));
         if (!rows) { perror("realloc"); exit(1); }
     }
     rows[nrows].path = strdup(path);
@@ -200,7 +198,7 @@ static void walk(const char *dir) {
     struct dirent *e;
     while ((e = readdir(d)) != NULL) {
         if (strcmp(e->d_name, ".") == 0 || strcmp(e->d_name, "..") == 0) continue;
-        char *full = malloc(strlen(dir) + strlen(e->d_name) + 2);
+        char *full = (char *)malloc(strlen(dir) + strlen(e->d_name) + 2);
         sprintf(full, "%s/%s", dir, e->d_name);
         struct stat st;
         if (lstat(full, &st) != 0) { free(full); continue; }
@@ -277,7 +275,7 @@ static char **fixed_drives(size_t *out_n) {
         if (!fixed) continue;
         if (n == cap) {
             size_t ncap = cap ? cap * 2 : 4;
-            char **np = realloc(drives, ncap * sizeof(char *));
+            char **np = (char **)realloc(drives, ncap * sizeof(char *));
             if (!np) break;
             drives = np;
             cap = ncap;
@@ -289,7 +287,7 @@ static char **fixed_drives(size_t *out_n) {
     if (n == 0) {
         /* 回落：与 Rust 一致，哪怕没有固定盘也试 C:。 */
         free(drives);
-        drives = malloc(sizeof(char *));
+        drives = (char **)malloc(sizeof(char *));
         if (drives) {
             drives[0] = strdup("C:\\");
             if (!drives[0]) {
@@ -471,7 +469,7 @@ static void hash_index_groups(cdc_fileindex_t *idx, uint64_t serial, uint64_t st
         cdc_index_hash_rows_free(rows, n);
         return;
     }
-    const char **paths = malloc(n * sizeof(char *));
+    const char **paths = (const char **)malloc(n * sizeof(char *));
     if (!paths) {
         cdc_index_hash_rows_free(rows, n);
         return;
@@ -480,7 +478,7 @@ static void hash_index_groups(cdc_fileindex_t *idx, uint64_t serial, uint64_t st
     cdc_hashcache_t *cache = cdc_hashcache_load_for_paths(paths, n);
     free(paths);
 
-    cdc_scan_input_t *inputs = malloc(n * sizeof(*inputs));
+    cdc_scan_input_t *inputs = (cdc_scan_input_t *)malloc(n * sizeof(*inputs));
     if (!inputs) {
         if (cache) cdc_hashcache_close(cache);
         cdc_index_hash_rows_free(rows, n);
@@ -547,7 +545,7 @@ static idx_outcome_t index_volume_incremental(cdc_fileindex_t *idx, const char *
     size_t n = changes->n_files;
     cdc_index_row_t *rows = NULL;
     if (n > 0) {
-        rows = malloc(n * sizeof(*rows));
+        rows = (cdc_index_row_t *)malloc(n * sizeof(*rows));
         if (!rows) {
             o.elapsed_secs = now_mono() - started;
             return o;
@@ -615,7 +613,7 @@ static idx_outcome_t index_volume_backfill(cdc_fileindex_t *idx, const char *dri
     CdcFileEntry *res = NULL;
     size_t n_res = 0;
     if (list.n > 0) {
-        res = malloc(list.n * sizeof(*res));
+        res = (CdcFileEntry *)malloc(list.n * sizeof(*res));
         if (!res) {
             cdc_file_entry_list_free(&list);
             o.elapsed_secs = now_mono() - started;
@@ -635,7 +633,7 @@ static idx_outcome_t index_volume_backfill(cdc_fileindex_t *idx, const char *dri
     size_t skipped = total_entries - n_res;
     cdc_index_row_t *rows = NULL;
     if (n_res > 0) {
-        rows = malloc(n_res * sizeof(*rows));
+        rows = (cdc_index_row_t *)malloc(n_res * sizeof(*rows));
         if (rows) {
             for (size_t i = 0; i < n_res; i++) {
                 rows[i].volume_serial = serial;
@@ -655,7 +653,7 @@ static idx_outcome_t index_volume_backfill(cdc_fileindex_t *idx, const char *dri
     /* 复用摘要缓存：已有 (path,size,mtime) 有效摘要的直接拷进索引。 */
     const char **paths = NULL;
     if (n_res > 0) {
-        paths = malloc(n_res * sizeof(char *));
+        paths = (const char **)malloc(n_res * sizeof(char *));
         if (paths) {
             for (size_t i = 0; i < n_res; i++) paths[i] = res[i].path;
         }
@@ -664,7 +662,7 @@ static idx_outcome_t index_volume_backfill(cdc_fileindex_t *idx, const char *dri
     free(paths);
     cdc_digest_set_t *seeded = NULL;
     if (n_res > 0) {
-        seeded = calloc(n_res, sizeof(*seeded));
+        seeded = (cdc_digest_set_t *)calloc(n_res, sizeof(*seeded));
         if (!seeded) {
             if (cache) cdc_hashcache_close(cache);
             cdc_file_entry_list_free(&list);
@@ -725,7 +723,7 @@ static idx_outcome_t index_volume_backfill(cdc_fileindex_t *idx, const char *dri
     }
     free(idx_dig);
     if (reuse_v.len > 0) {
-        cdc_fileindex_set_digests_batch(idx, reuse_v.data, reuse_v.len, stamp_now);
+        cdc_fileindex_set_digests_batch(idx, (const cdc_digest_update_t *)reuse_v.data, reuse_v.len, stamp_now);
     }
     cdc_vec_free(&reuse_v);
 
@@ -733,7 +731,7 @@ static idx_outcome_t index_volume_backfill(cdc_fileindex_t *idx, const char *dri
      * 零 I/O 排除，与 scan_dups 同一条规则；分组在管线内部做）。 */
     cdc_scan_input_t *inputs = NULL;
     if (n_res > 0) {
-        inputs = malloc(n_res * sizeof(*inputs));
+        inputs = (cdc_scan_input_t *)malloc(n_res * sizeof(*inputs));
         if (inputs) {
             for (size_t i = 0; i < n_res; i++) {
                 inputs[i].path = res[i].path;

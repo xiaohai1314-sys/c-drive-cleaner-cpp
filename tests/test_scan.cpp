@@ -10,12 +10,10 @@
  *       third_party/cjson（CDC_HAVE_CJSON 时）。
  * 不依赖 fileindex.c / indextask.c / mft_raw.c（只用 fileindex.h 的类型）。
  */
-#define _POSIX_C_SOURCE 200809L
 /* 注意：必须带值 1，不能写裸 #define _DEFAULT_SOURCE——
  * mimalloc 的 -include wrapper（src/cdc_mimalloc_override.h）先包含
  * 系统头，features.h 已把 _DEFAULT_SOURCE 归一化为 1；裸定义再定义一次
  * 会触发 -Werror 的 macro-redefined。 */
-#define _DEFAULT_SOURCE 1
 
 #include <dirent.h>
 #include <errno.h>
@@ -518,14 +516,14 @@ static void test_snapshot(void) {
     s.min_size = 1ULL << 20;
     s.bytes_per_cluster = 4096;
     s.n_dirs = 1;
-    s.dirs = calloc(1, sizeof *s.dirs);
+    s.dirs = (CdcDirNode *)calloc(1, sizeof *s.dirs);
     s.dirs[0].index = 10;
     s.dirs[0].seq = 3;
     s.dirs[0].parent_frn = 5;
     s.dirs[0].name = strdup("Users");
     s.dirs[0].reparse = 0;
     s.n_files = 1;
-    s.files = calloc(1, sizeof *s.files);
+    s.files = (CdcRawFile *)calloc(1, sizeof *s.files);
     s.files[0].frn = (1ULL << 48) | 20;
     s.files[0].parent_frn = (3ULL << 48) | 10;
     s.files[0].name = strdup("video.mp4");

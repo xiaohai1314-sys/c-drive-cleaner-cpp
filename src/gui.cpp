@@ -1906,7 +1906,8 @@ static int h_frag_analyze(const char *args_json, char **out_json,
     cdc_task_set_stage("frag_analyze", "分析磁盘碎片");
     cJSON *report = NULL;
     if (!gui_valid_fixed_drive(drive_buf)) {
-        report = gui_frag_report_json(drive_buf, &(cdc_frag_parsed_t){0}, -1);
+        cdc_frag_parsed_t empty_parsed = {};
+        report = gui_frag_report_json(drive_buf, &empty_parsed, -1);
         cdc_task_finish("frag_analyze", "ok", "碎片率 0.0%");
         return gui_ok_json(out_json, report);
     }

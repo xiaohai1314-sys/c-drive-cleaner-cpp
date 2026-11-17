@@ -1689,16 +1689,16 @@ typedef struct {
     ULONG_PTR Information;
 } cdc_io_status_block_t;
 
-extern NTSTATUS NTAPI NtCreateFile(
+extern "C" NTSTATUS NTAPI NtCreateFile(
     PHANDLE FileHandle, ACCESS_MASK DesiredAccess,
     cdc_object_attributes_t *ObjectAttributes,
     cdc_io_status_block_t *IoStatusBlock, PLARGE_INTEGER AllocationSize,
     ULONG FileAttributes, ULONG ShareAccess, ULONG CreateDisposition,
     ULONG CreateOptions, PVOID EaBuffer, ULONG EaLength);
-extern NTSTATUS NTAPI NtSetInformationFile(
+extern "C" NTSTATUS NTAPI NtSetInformationFile(
     HANDLE FileHandle, cdc_io_status_block_t *IoStatusBlock,
     PVOID FileInformation, ULONG Length, ULONG FileInformationClass);
-extern ULONG NTAPI RtlNtStatusToDosError(NTSTATUS Status);
+extern "C" ULONG NTAPI RtlNtStatusToDosError(NTSTATUS Status);
 
 /* 内部 io 种类：只为 delete_file_checked 的 Skipped/Failed 分流服务。 */
 typedef enum {
@@ -2041,7 +2041,7 @@ int cdc_mark_delete(cdc_handle_t file) {
     if (!file) return 0;
     uint8_t info = 1; /* FILE_DISPOSITION_INFO{ DeleteFile: TRUE }，1 字节 */
     return SetFileInformationByHandle((HANDLE)file,
-                                      CDC_FILE_DISPOSITION_INFO_CLASS, &info,
+                                      (FILE_INFO_BY_HANDLE_CLASS)CDC_FILE_DISPOSITION_INFO_CLASS, &info,
                                       1) != 0;
 }
 
