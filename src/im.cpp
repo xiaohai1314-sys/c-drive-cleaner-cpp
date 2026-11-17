@@ -1088,7 +1088,7 @@ static void hex_preview(const uint8_t *data, size_t n, cdc_buf_t *out) {
 /* UTF-8 lossy 解码：非法序列按 U+FFFD 计（与 Rust from_utf8_lossy 的
  * maximal-subpart 替换基本一致：每段非法子序列一个 U+FFFD）。 */
 static void utf8_lossy_append(cdc_buf_t *out, const uint8_t *s, size_t n) {
-    static const char REPL[3] = { (char)0xEF, (char)0xBF, (char)0xBD };
+    static const uint8_t REPL[3] = { 0xEF, 0xBF, 0xBD };
     size_t i = 0;
     while (i < n) {
         uint8_t c = s[i];
