@@ -473,12 +473,7 @@ static void hash_index_groups(cdc_fileindex_t *idx, uint64_t serial, uint64_t st
     cdc_hashcache_t *cache = cdc_hashcache_load_for_paths(paths, n);
     free(paths);
 
-    cdc_scan_input_t *inputs = (cdc_scan_input_t *)malloc(n * sizeof(*inputs));
-    if (!inputs) {
-        if (cache) cdc_hashcache_close(cache);
-        cdc_index_hash_rows_free(rows, n);
-        return;
-    }
+    std::vector<cdc::ScanInput> inputs(n);
     uint64_t merged_full = 0;
     for (size_t i = 0; i < n; i++) {
         cdc_digest_set_t merged = rows[i].digests;
@@ -500,22 +495,18 @@ static void hash_index_groups(cdc_fileindex_t *idx, uint64_t serial, uint64_t st
         inputs[i].frn = rows[i].frn;
         inputs[i].digests = merged;
     }
-    cdc_digest_update_t *updates = NULL;
-    size_t n_upd = 0;
-    if (cdc_scan_hash_groups(inputs, n, cache, stamp_now, &updates, &n_upd) == 0 &&
-        n_upd > 0) {
-        /* scan.c 的 updates 里 volume_serial 填 0（inputs 里没有卷号）；
+    std::vector<cdc_digest_update_t> updates;
+    if (cdc::scan_hash_groups(inputs, cache, stamp_now, updates) == 0 && !updates.empty()) {
+        /* scan 的 updates 里 volume_serial 填 0（inputs 里没有卷号）；
          * 写回前必须按卷填好，否则 WHERE volume_serial=?1 匹配不到行。 */
-        for (size_t i = 0; i < n_upd; i++) updates[i].volume_serial = serial;
-        cdc_fileindex_set_digests_batch(idx, updates, n_upd, stamp_now);
+        for (cdc_digest_update_t &u : updates) u.volume_serial = serial;
+        cdc_fileindex_set_digests_batch(idx, updates.data(), updates.size(), stamp_now);
         uint64_t upd_full = 0;
-        for (size_t i = 0; i < n_upd; i++) {
-            if (updates[i].digests.has_full) upd_full++;
+        for (const cdc_digest_update_t &u : updates) {
+            if (u.digests.has_full) upd_full++;
         }
         *out_new = upd_full > merged_full ? upd_full - merged_full : 0;
-        free(updates);
     }
-    free(inputs);
     if (cache) cdc_hashcache_close(cache);
     cdc_index_hash_rows_free(rows, n);
 }
@@ -703,35 +694,25 @@ static idx_outcome_t index_volume_backfill(cdc_fileindex_t *idx, const char *dri
 
     /* 按 size 分组，只有 ≥2 个文件同 size 的组才进哈希管线（大小唯一的
      * 零 I/O 排除，与 scan_dups 同一条规则；分组在管线内部做）。 */
-    cdc_scan_input_t *inputs = NULL;
-    if (n_res > 0) {
-        inputs = (cdc_scan_input_t *)malloc(n_res * sizeof(*inputs));
-        if (inputs) {
-            for (size_t i = 0; i < n_res; i++) {
-                inputs[i].path = res[i].path.c_str();
-                inputs[i].size = res[i].size;
-                inputs[i].mtime = res[i].mtime;
-                inputs[i].frn = res[i].frn;
-                inputs[i].digests = seeded[i];
-            }
-        }
+    std::vector<cdc::ScanInput> inputs(n_res);
+    for (size_t i = 0; i < n_res; i++) {
+        inputs[i].path = res[i].path.c_str();
+        inputs[i].size = res[i].size;
+        inputs[i].mtime = res[i].mtime;
+        inputs[i].frn = res[i].frn;
+        inputs[i].digests = seeded[i];
     }
     uint64_t upd_full = 0;
-    if (inputs) {
-        cdc_digest_update_t *updates = NULL;
-        size_t n_upd = 0;
-        if (cdc_scan_hash_groups(inputs, n_res, cache, stamp_now, &updates, &n_upd) ==
-                0 &&
-            n_upd > 0) {
-            /* 同上：scan.c 的 updates 里 volume_serial 为 0，写回前按卷填好。 */
-            for (size_t i = 0; i < n_upd; i++) updates[i].volume_serial = serial;
-            cdc_fileindex_set_digests_batch(idx, updates, n_upd, stamp_now);
-            for (size_t i = 0; i < n_upd; i++) {
-                if (updates[i].digests.has_full) upd_full++;
+    if (!inputs.empty()) {
+        std::vector<cdc_digest_update_t> updates;
+        if (cdc::scan_hash_groups(inputs, cache, stamp_now, updates) == 0 && !updates.empty()) {
+            /* 同上：scan 的 updates 里 volume_serial 为 0，写回前按卷填好。 */
+            for (cdc_digest_update_t &u : updates) u.volume_serial = serial;
+            cdc_fileindex_set_digests_batch(idx, updates.data(), updates.size(), stamp_now);
+            for (const cdc_digest_update_t &u : updates) {
+                if (u.digests.has_full) upd_full++;
             }
-            free(updates);
         }
-        free(inputs);
     }
     uint64_t newly = upd_full > reused_full ? upd_full - reused_full : 0;
     if (cache) cdc_hashcache_close(cache);

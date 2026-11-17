@@ -712,10 +712,7 @@ static void test_hashcache(void) {
 /* ---------------- 4. fastio（Linux 等价实现） ---------------- */
 
 static int g_ticks = 0;
-static void tick_cb(void *ctx) {
-    (void)ctx;
-    g_ticks++;
-}
+static void tick_cb() { g_ticks++; }
 
 static void test_fastio(void) {
     printf("== fastio ==\n");
@@ -730,12 +727,12 @@ static void test_fastio(void) {
     write_repeat(pa, 8192, 'A');
     if (link(pa, pb) != 0) { perror("link"); exit(2); }
     write_repeat(pc, 100, 'C');
-    CdcFileId idA, idB;
-    CHECK_INT(cdc_query_file_identity(pa, &idA), 1, "hardlink A has id");
-    CHECK_INT(cdc_query_file_identity(pb, &idB), 1, "hardlink B has id");
+    cdc::FileId idA, idB;
+    CHECK_INT(cdc::query_file_identity(pa, idA), 1, "hardlink A has id");
+    CHECK_INT(cdc::query_file_identity(pb, idB), 1, "hardlink B has id");
     CHECK_U64(idA.file_index, idB.file_index, "hardlink same index");
-    CHECK_INT(cdc_query_file_identity(pc, &idA), 0, "single no id");
-    CHECK_INT(cdc_query_file_identity("/tmp/cdc-test-no-such-file.bin", &idA), 0,
+    CHECK_INT(cdc::query_file_identity(pc, idA), 0, "single no id");
+    CHECK_INT(cdc::query_file_identity("/tmp/cdc-test-no-such-file.bin", idA), 0,
               "missing no id");
 
     /* iocp_read_heads：摘要 == xxh3(前 4KB) 的 32 字节载体编码，
@@ -746,13 +743,14 @@ static void test_fastio(void) {
     cdc_digest_t expA, expC;
     cdc::xxh3_buf_to_digest32((const uint8_t *)headA, 4096, expA.bytes);
     cdc::xxh3_buf_to_digest32((const uint8_t *)headC, 100, expC.bytes);
-    CdcIocpRequest reqs[3];
-    reqs[0].idx = 0; reqs[0].path = pa; reqs[0].frn = 0; reqs[0].want = 4096;
-    reqs[1].idx = 1; reqs[1].path = pc; reqs[1].frn = 0; reqs[1].want = 4096;
-    reqs[2].idx = 2; reqs[2].path = (char *)"/tmp/cdc-test-no-such-file.bin"; reqs[2].frn = 0; reqs[2].want = 4096;
-    CdcIocpResult res[3];
+    const cdc::IocpRequest reqs[3] = {
+        {0, pa, 0, 4096},
+        {1, pc, 0, 4096},
+        {2, "/tmp/cdc-test-no-such-file.bin", 0, 4096},
+    };
     g_ticks = 0;
-    size_t nres = cdc_iocp_read_heads(reqs, 3, 4, NULL, tick_cb, NULL, res);
+    std::vector<cdc::IocpResult> res = cdc::iocp_read_heads(reqs, 4, nullptr, tick_cb);
+    size_t nres = res.size();
     CHECK_U64(nres, 2, "iocp results (missing skipped)");
     CHECK_INT(g_ticks, 3, "iocp ticks == requests");
     if (nres == 2) {
@@ -763,22 +761,22 @@ static void test_fastio(void) {
     }
 
     /* coalesced_raw_volume_heads：Linux 恒返回 0。 */
-    CdcRawHeadTarget tgt[1];
-    tgt[0].idx = 0; tgt[0].offset = 0; tgt[0].want = 4096;
-    CdcHeadResult hout[1];
-    CHECK_U64(cdc_coalesced_raw_volume_heads('C', tgt, 1, 1, NULL, NULL, NULL, hout), 0,
+    const cdc::RawHeadTarget tgt[1] = {{0, 0, 4096}};
+    CHECK_U64(cdc::coalesced_raw_volume_heads('C', tgt, true, nullptr, {}).size(), 0,
               "coalesced linux 0");
 
     /* open_checked + read_at：读到 'A'。 */
-    CdcFile *f = cdc_file_open_checked(pa, 0, CDC_FILE_FLAG_SEQUENTIAL_SCAN, NULL, NULL, NULL, NULL);
-    CHECK(f != NULL, "open_checked");
-    if (f) {
-        uint8_t buf[16];
-        size_t got = 0;
-        CHECK_INT(cdc_file_read_at(f, 0, buf, sizeof buf, &got), 0, "read_at rc");
-        CHECK_U64(got, 16, "read_at n");
-        CHECK(memcmp(buf, "AAAAAAAAAAAAAAAA", 16) == 0, "read_at content");
-        cdc_file_close(f);
+    {
+        cdc::File f = cdc::File::open_checked(pa, 0, cdc::kFileFlagSequentialScan, nullptr,
+                                              nullptr, nullptr, nullptr);
+        CHECK(static_cast<bool>(f), "open_checked");
+        if (f) {
+            uint8_t buf[16];
+            size_t got = 0;
+            CHECK_INT(f.read_at(0, buf, sizeof buf, got), 0, "read_at rc");
+            CHECK_U64(got, 16, "read_at n");
+            CHECK(memcmp(buf, "AAAAAAAAAAAAAAAA", 16) == 0, "read_at content");
+        }
     }
 
     unlink(pa);
@@ -793,41 +791,39 @@ static void test_fastio(void) {
 static void test_scan_big(const char *fixtures) {
     printf("== scan_big (%s) ==\n", fixtures);
     const char *drives[] = { fixtures };
-    CdcBigFileList out;
-    CdcScanOpts opts;
-    memset(&opts, 0, sizeof opts);
-    CHECK_INT(cdc_scan_big(drives, 1, &opts, &out), 0, "scan_big rc");
+    cdc::BigFileList out;
+    cdc::ScanOpts opts;
+    CHECK_INT(cdc::scan_big(drives, opts, out), 0, "scan_big rc");
     /* 期望 5 条，按 size 降序。 */
     static const char *want_names[] = { "setup.exe", "data.bin", "movie2.mkv", "song.mp3", "photo.jpg" };
     static const uint64_t want_sizes[] = { 150ULL * 1024 * 1024, 60ULL * 1024 * 1024,
                                             25ULL * 1024 * 1024, 6ULL * 1024 * 1024,
                                             3ULL * 1024 * 1024 };
-    CHECK_U64(out.n, 5, "scan_big count");
-    for (size_t i = 0; i < out.n && i < 5; i++) {
-        CHECK_STREQ(base_name(out.items[i].path), want_names[i], "scan_big name");
-        CHECK_U64(out.items[i].size, want_sizes[i], "scan_big size");
+    CHECK_U64(out.size(), 5, "scan_big count");
+    for (size_t i = 0; i < out.size() && i < 5; i++) {
+        CHECK_STREQ(base_name(out[i].path.c_str()), want_names[i], "scan_big name");
+        CHECK_U64(out[i].size, want_sizes[i], "scan_big size");
     }
     /* 排除项：setup2.exe 90M（<100M）、data2.bin 40M（<50M）、
      * movie.mp4 3M（<20M）、song2.mp3 4M（<5M）、small.jpg 1M（<2MB 底线）、
      * sub/pagefile.sys 10M（系统名）。 */
-    for (size_t i = 0; i < out.n; i++) {
-        const char *b = base_name(out.items[i].path);
+    for (size_t i = 0; i < out.size(); i++) {
+        const char *b = base_name(out[i].path.c_str());
         CHECK(strcmp(b, "setup2.exe") != 0 && strcmp(b, "data2.bin") != 0 &&
                   strcmp(b, "movie.mp4") != 0 && strcmp(b, "song2.mp3") != 0 &&
                   strcmp(b, "small.jpg") != 0 && strcmp(b, "pagefile.sys") != 0,
               "scan_big excluded %s", b);
     }
-    cdc_big_file_list_free(&out);
     printf("scan_big done\n");
 }
 
 /* ---------------- 6. scan_dups 端到端 ---------------- */
 
-static int group_has_files(const CdcDupGroupList *g, const char *a, const char *b) {
-    for (size_t i = 0; i < g->n; i++) {
-        if (g->items[i].n_files == 2) {
-            const char *f0 = base_name(g->items[i].files[0]);
-            const char *f1 = base_name(g->items[i].files[1]);
+static int group_has_files(const cdc::DupGroupList *g, const char *a, const char *b) {
+    for (const cdc::DupGroup &grp : *g) {
+        if (grp.files.size() == 2) {
+            const char *f0 = base_name(grp.files[0].c_str());
+            const char *f1 = base_name(grp.files[1].c_str());
             if ((strcmp(f0, a) == 0 && strcmp(f1, b) == 0) ||
                 (strcmp(f0, b) == 0 && strcmp(f1, a) == 0))
                 return 1;
@@ -836,11 +832,11 @@ static int group_has_files(const CdcDupGroupList *g, const char *a, const char *
     return 0;
 }
 
-static int group_count_for(const CdcDupGroupList *g, const char *a) {
+static int group_count_for(const cdc::DupGroupList *g, const char *a) {
     int n = 0;
-    for (size_t i = 0; i < g->n; i++)
-        for (size_t j = 0; j < g->items[i].n_files; j++)
-            if (strcmp(base_name(g->items[i].files[j]), a) == 0) n++;
+    for (const cdc::DupGroup &grp : *g)
+        for (const std::string &f : grp.files)
+            if (strcmp(base_name(f.c_str()), a) == 0) n++;
     return n;
 }
 
@@ -880,13 +876,12 @@ static void test_scan_dups(void) {
     join_path(p, sizeof p, dir_tmpl, "f2.bin"); pwrite_byte(p, 5ULL * 1024 * 1024, 'F');
 
     const char *roots[] = { dir_tmpl };
-    CdcScanOpts opts;
-    memset(&opts, 0, sizeof opts);
+    cdc::ScanOpts opts;
 
     /* 正常模式：a、c、d 三组；e、f 不成组。 */
-    CdcDupGroupList g1;
-    CHECK_INT(cdc_scan_dups(roots, 1, 1, &opts, &g1), 0, "scan_dups rc");
-    CHECK_U64(g1.n, 3, "scan_dups normal groups");
+    cdc::DupGroupList g1;
+    CHECK_INT(cdc::scan_dups(roots, 1, opts, g1), 0, "scan_dups rc");
+    CHECK_U64(g1.size(), 3, "scan_dups normal groups");
     CHECK(group_has_files(&g1, "a1.bin", "a2.bin"), "group a");
     CHECK(group_has_files(&g1, "c1.bin", "c2.bin"), "group c");
     CHECK(group_has_files(&g1, "d1.bin", "d2.bin"), "group d");
@@ -894,25 +889,21 @@ static void test_scan_dups(void) {
     CHECK_INT(group_count_for(&g1, "b1.bin"), 0, "b no group");
     CHECK_INT(group_count_for(&g1, "e1.bin"), 0, "e no group (normal)");
     CHECK_INT(group_count_for(&g1, "f1.bin"), 0, "f no group (probe)");
-    cdc_dup_group_list_free(&g1);
 
     /* fast 模式：e 成组；f 也成组——fast 下 strong 即终局、不走 probe，
      * 5MB 处的差异落在 strong 窗口之外（与 Rust 版 fast 模式同一取舍）。 */
-    CdcScanOpts fopts;
-    memset(&fopts, 0, sizeof fopts);
-    fopts.fast = 1;
-    CdcDupGroupList g2;
-    CHECK_INT(cdc_scan_dups(roots, 1, 1, &fopts, &g2), 0, "scan_dups fast rc");
+    cdc::ScanOpts fopts;
+    fopts.fast = true;
+    cdc::DupGroupList g2;
+    CHECK_INT(cdc::scan_dups(roots, 1, fopts, g2), 0, "scan_dups fast rc");
     CHECK(group_has_files(&g2, "e1.bin", "e2.bin"), "group e (fast)");
     CHECK(group_has_files(&g2, "f1.bin", "f2.bin"), "group f (fast, strong misses 5MB diff)");
-    cdc_dup_group_list_free(&g2);
 
     /* 第二次跑：结果相同（缓存命中路径），且缓存里有 a1 的 full 摘要。 */
-    CdcDupGroupList g3;
-    CHECK_INT(cdc_scan_dups(roots, 1, 1, &opts, &g3), 0, "scan_dups second rc");
-    CHECK_U64(g3.n, 3, "scan_dups second groups");
+    cdc::DupGroupList g3;
+    CHECK_INT(cdc::scan_dups(roots, 1, opts, g3), 0, "scan_dups second rc");
+    CHECK_U64(g3.size(), 3, "scan_dups second groups");
     CHECK(group_has_files(&g3, "a1.bin", "a2.bin"), "group a (second)");
-    cdc_dup_group_list_free(&g3);
     {
         char pa1[PATH_MAX];
         join_path(pa1, sizeof pa1, dir_tmpl, "a1.bin");
@@ -931,11 +922,10 @@ static void test_scan_dups(void) {
     join_path(p, sizeof p, dir_tmpl, "a2.bin");
     write_repeat(p, 8192, 'Z');
     bump_mtime(p, 5); /* 同秒内重写 mtime 不变，缓存仍会命中——必须推后 mtime */
-    CdcDupGroupList g4;
-    CHECK_INT(cdc_scan_dups(roots, 1, 1, &opts, &g4), 0, "scan_dups after touch rc");
+    cdc::DupGroupList g4;
+    CHECK_INT(cdc::scan_dups(roots, 1, opts, g4), 0, "scan_dups after touch rc");
     CHECK_INT(group_count_for(&g4, "a1.bin"), 0, "a group gone after touch");
     CHECK_INT(group_count_for(&g4, "a2.bin"), 0, "a2 not grouped");
-    cdc_dup_group_list_free(&g4);
 
     /* 清理。 */
     char cmd[PATH_MAX + 64];
@@ -961,17 +951,16 @@ static void test_hash_groups(void) {
     struct stat s1, s2, s3;
     stat(g1p, &s1); stat(g2p, &s2); stat(g3p, &s3);
 
-    cdc_scan_input_t inputs[3];
-    memset(inputs, 0, sizeof inputs);
+    cdc::ScanInput inputs[3];
     inputs[0].path = g1p; inputs[0].size = (uint64_t)s1.st_size; inputs[0].mtime = (uint64_t)s1.st_mtime; inputs[0].frn = 0;
     inputs[1].path = g2p; inputs[1].size = (uint64_t)s2.st_size; inputs[1].mtime = (uint64_t)s2.st_mtime; inputs[1].frn = 0;
     inputs[2].path = g3p; inputs[2].size = (uint64_t)s3.st_size; inputs[2].mtime = (uint64_t)s3.st_mtime; inputs[2].frn = 0;
 
     cdc_hashcache_t *cache = cdc_hashcache_open(NULL); /* 纯内存 */
-    cdc_digest_update_t *updates = NULL;
-    size_t n_updates = 0;
-    CHECK_INT(cdc_scan_hash_groups(inputs, 3, cache, cdc::now_seconds(), &updates, &n_updates), 0,
+    std::vector<cdc_digest_update_t> updates;
+    CHECK_INT(cdc::scan_hash_groups(inputs, cache, cdc::now_seconds(), updates), 0,
               "hash_groups rc");
+    size_t n_updates = updates.size();
     /* g1/g2 一对（同 size 且内容相同）=> 各一条带 full 的 update；g3 单件 => 无。 */
     CHECK_U64(n_updates, 2, "hash_groups updates");
     int saw_g1 = 0, saw_g2 = 0;
@@ -988,7 +977,6 @@ static void test_hash_groups(void) {
     if (n_updates == 2)
         CHECK(memcmp(updates[0].digests.full.bytes, updates[1].digests.full.bytes, 32) == 0,
               "updates full digests equal");
-    free(updates);
 
     /* 管线已把摘要写回缓存（内存态）。 */
     cdc_digest_set_t o;
@@ -1150,14 +1138,14 @@ static void test_hashcache_xxh_compat(void) {
 }
 
 /* 一组内是否恰好包含 names 全部（n 个）文件。 */
-static int group_has_all(const CdcDupGroupList *g, const char **names, size_t n) {
-    for (size_t i = 0; i < g->n; i++) {
-        if (g->items[i].n_files != n) continue;
+static int group_has_all(const cdc::DupGroupList *g, const char **names, size_t n) {
+    for (const cdc::DupGroup &grp : *g) {
+        if (grp.files.size() != n) continue;
         int ok = 1;
         for (size_t k = 0; k < n && ok; k++) {
             int found = 0;
-            for (size_t j = 0; j < g->items[i].n_files; j++) {
-                if (strcmp(base_name(g->items[i].files[j]), names[k]) == 0) {
+            for (const std::string &f : grp.files) {
+                if (strcmp(base_name(f.c_str()), names[k]) == 0) {
                     found = 1;
                     break;
                 }
@@ -1172,44 +1160,38 @@ static int group_has_all(const CdcDupGroupList *g, const char **names, size_t n)
 /* ---------------- 8. 并行（cdc_par_for / 共享锁） ---------------- */
 
 static int g_par_marks[1024];
-static void par_mark_work(void *ctx, size_t idx) {
-    (void)ctx;
-    g_par_marks[idx] = 1;
-}
+static void par_mark_work(size_t idx) { g_par_marks[idx] = 1; }
 
 static int g_par_locked_total = 0;
-static void par_locked_work(void *ctx, size_t idx) {
-    (void)ctx;
-    (void)idx;
-    cdc_shared_lock();
+static void par_locked_work(size_t) {
+    cdc::LockGuard g(cdc::shared_mutex());
     g_par_locked_total++;
-    cdc_shared_unlock();
 }
 
 static void test_par(void) {
     printf("== par ==\n");
-    CHECK_INT(cdc_par_cpu_count() >= 1, 1, "cpu count >= 1");
-    CHECK_INT(cdc_par_hash_workers(1) >= 1 && cdc_par_hash_workers(1) <= 32, 1,
+    CHECK_INT(cdc::par_cpu_count() >= 1, 1, "cpu count >= 1");
+    CHECK_INT(cdc::par_hash_workers(true) >= 1 && cdc::par_hash_workers(true) <= 32, 1,
               "ssd workers range");
-    CHECK_INT(cdc_par_hash_workers(0) >= 1 && cdc_par_hash_workers(0) <= 32, 1,
+    CHECK_INT(cdc::par_hash_workers(false) >= 1 && cdc::par_hash_workers(false) <= 32, 1,
               "hdd workers range");
     /* 1000 下标、8 线程：每一下标恰好处理一次。 */
     memset(g_par_marks, 0, sizeof g_par_marks);
-    CHECK_INT(cdc_par_for(1000, 8, par_mark_work, NULL), 0, "par_for rc");
+    CHECK_INT(cdc::par_for(1000, 8, par_mark_work), 0, "par_for rc");
     int all = 1;
     for (int i = 0; i < 1000; i++) all &= (g_par_marks[i] == 1);
     CHECK(all, "par_for each idx once");
     /* 顺序退化：nthreads 0/1、n=0/1。 */
     memset(g_par_marks, 0, sizeof g_par_marks);
-    CHECK_INT(cdc_par_for(1000, 1, par_mark_work, NULL), 0, "par_for 1 thread");
+    CHECK_INT(cdc::par_for(1000, 1, par_mark_work), 0, "par_for 1 thread");
     all = 1;
     for (int i = 0; i < 1000; i++) all &= (g_par_marks[i] == 1);
     CHECK(all, "par_for 1 thread each idx once");
-    CHECK_INT(cdc_par_for(0, 8, par_mark_work, NULL), 0, "par_for n=0");
-    CHECK_INT(cdc_par_for(1, 8, par_mark_work, NULL), 0, "par_for n=1");
+    CHECK_INT(cdc::par_for(0, 8, par_mark_work), 0, "par_for n=0");
+    CHECK_INT(cdc::par_for(1, 8, par_mark_work), 0, "par_for n=1");
     /* 共享锁：8 线程 × 1000 次加锁递增，总数精确（无丢失更新）。 */
     g_par_locked_total = 0;
-    CHECK_INT(cdc_par_for(8000, 8, par_locked_work, NULL), 0, "par_for locked rc");
+    CHECK_INT(cdc::par_for(8000, 8, par_locked_work), 0, "par_for locked rc");
     CHECK_INT(g_par_locked_total, 8000, "par_for locked total");
     printf("par done\n");
 }
@@ -1222,15 +1204,13 @@ static void test_scan_dups_fixtures(const char *fixtures) {
     if (!mkdtemp(cache_tmpl)) { perror("mkdtemp"); exit(2); }
     setenv("LOCALAPPDATA", cache_tmpl, 1);
     const char *roots[] = { fixtures };
-    CdcScanOpts opts;
-    memset(&opts, 0, sizeof opts);
-    CdcDupGroupList g;
-    CHECK_INT(cdc_scan_dups(roots, 1, 1, &opts, &g), 0, "scan_dups fixtures rc");
+    cdc::ScanOpts opts;
+    cdc::DupGroupList g;
+    CHECK_INT(cdc::scan_dups(roots, 1, opts, g), 0, "scan_dups fixtures rc");
     /* 只有 movie.mp4 与 photo.jpg 同为 3MB 稀疏零 => 一组；
      * 其余尺寸唯一，pagefile.sys 是系统名被排除。 */
-    CHECK_U64(g.n, 1, "scan_dups fixtures groups");
+    CHECK_U64(g.size(), 1, "scan_dups fixtures groups");
     CHECK(group_has_files(&g, "movie.mp4", "photo.jpg"), "fixtures group");
-    cdc_dup_group_list_free(&g);
     char cmd[PATH_MAX + 64];
     snprintf(cmd, sizeof cmd, "rm -rf '%s'", cache_tmpl);
     CHECK_INT(system(cmd), 0, "cleanup dupsfx cache");
@@ -1280,13 +1260,12 @@ static void test_par_dups(void) {
         write_repeat(p, 64 * 1024, 'B');
     }
     const char *roots[] = { dir_tmpl };
-    CdcScanOpts opts;
-    memset(&opts, 0, sizeof opts);
+    cdc::ScanOpts opts;
     opts.on_tick = tick_cb;
     g_ticks = 0;
-    CdcDupGroupList g;
-    CHECK_INT(cdc_scan_dups(roots, 1, 1, &opts, &g), 0, "par_dups rc");
-    CHECK_U64(g.n, 3, "par_dups groups");
+    cdc::DupGroupList g;
+    CHECK_INT(cdc::scan_dups(roots, 1, opts, g), 0, "par_dups rc");
+    CHECK_U64(g.size(), 3, "par_dups groups");
     CHECK(group_has_files(&g, "h1.bin", "h2.bin"), "par group h");
     static const char *want_a[] = { "pa0.bin", "pa1.bin", "pa2.bin",
                                     "pa3.bin", "pa4.bin", "pa5.bin" };
@@ -1295,21 +1274,20 @@ static void test_par_dups(void) {
     CHECK(group_has_all(&g, want_a, 6), "par group A");
     CHECK(group_has_all(&g, want_b, 6), "par group B");
     /* h 组的 full 摘要 == 独立算出的整文件 blake3（验证 2MB 缓冲全哈希）。 */
-    for (size_t i = 0; i < g.n; i++) {
-        if (g.items[i].n_files == 2 &&
-            strcmp(base_name(g.items[i].files[0]), "h1.bin") == 0) {
+    for (const cdc::DupGroup &grp : g) {
+        if (grp.files.size() == 2 &&
+            strcmp(base_name(grp.files[0].c_str()), "h1.bin") == 0) {
             char hp[PATH_MAX];
             join_path(hp, sizeof hp, dir_tmpl, "h1.bin");
             cdc_digest_t ref = blake3_of_file(hp);
             char hex[65];
             cdc_digest_to_hex(&ref, hex);
-            CHECK_STREQ(g.items[i].hash_hex, hex, "par h full digest");
+            CHECK_STREQ(grp.hash_hex.c_str(), hex, "par h full digest");
         }
     }
     /* tick 数与顺序语义一致：阶段 1 的 14 次 + 阶段 2 的 14 次 +
      * 探针 2 次 + 阶段 3 的 14 次 = 44（64KB 组 36 + 20MB 组 8）。 */
     CHECK_INT(g_ticks, 44, "par_dups ticks");
-    cdc_dup_group_list_free(&g);
     char cmd[PATH_MAX + 64];
     snprintf(cmd, sizeof cmd, "rm -rf '%s' '%s'", dir_tmpl, cache_tmpl);
     CHECK_INT(system(cmd), 0, "cleanup par_dups tmp");

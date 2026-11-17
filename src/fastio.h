@@ -1,117 +1,129 @@
-/* fastio.h — 高速 Windows 文件读取原语，对照 desktop/src/fastio.rs。
- *
- * Windows：卷句柄 LCN 合并直读 + OpenFileById + IOCP 异步重叠 I/O。
- * Linux：等价的顺序实现（pread/read + stat），保证流水线全平台可跑、可测。
- */
-#ifndef CDC_FASTIO_H
-#define CDC_FASTIO_H
+// fastio.h — 高速文件读取原语，对照 desktop/src/fastio.rs。
+//
+// Windows：卷句柄 LCN 合并直读 + OpenFileById + IOCP 异步重叠 I/O。
+// Linux：等价的顺序实现（pread/read + stat），保证流水线全平台可跑、可测。
+#pragma once
 
-#include <stddef.h>
-#include <stdint.h>
+#include <cstddef>
+#include <cstdint>
+#include <memory>
+#include <span>
+#include <vector>
 
-/* 与 fastio.rs 对应的打开标志（Windows FILE_FLAG_*；Linux 下映射为 posix_fadvise）。 */
-#define CDC_FILE_FLAG_RANDOM_ACCESS 0x10000000u
-#define CDC_FILE_FLAG_SEQUENTIAL_SCAN 0x08000000u
-#define CDC_FILE_FLAG_OVERLAPPED 0x40000000u
-#define CDC_FILE_FLAG_BACKUP_SEMANTICS 0x02000000u
+#include "raii.h"
+#include "util.h"
 
-typedef struct {
-    uint32_t volume_serial;
-    uint64_t file_index;
-} CdcFileId;
+namespace cdc {
 
-typedef struct CdcFile CdcFile; /* 不透明：Windows HANDLE / Linux fd */
+// 与 fastio.rs 对应的打开标志（Windows FILE_FLAG_*；Linux 下映射为 posix_fadvise）。
+inline constexpr uint32_t kFileFlagRandomAccess = 0x10000000u;
+inline constexpr uint32_t kFileFlagSequentialScan = 0x08000000u;
+inline constexpr uint32_t kFileFlagOverlapped = 0x40000000u;
+inline constexpr uint32_t kFileFlagBackupSemantics = 0x02000000u;
 
-/* 打开并校验：SKIP 属性返回 NULL；frn!=0 且 hint 非空时优先 OpenFileById，
- * 失败回退按路径打开。hint 为 cdc_open_drive_hint 的返回值（可为 NULL）。
- * has_file_id：仅 n_number_of_links>1 且 index!=0 时为 1；actual_size_out
- * 为句柄看到的大小（失败时不写）。 */
-CdcFile *cdc_file_open_checked(const char *path, uint64_t frn, uint32_t flags, void *hint,
-                               int *has_file_id, CdcFileId *file_id_out,
-                               uint64_t *actual_size_out);
-void cdc_file_close(CdcFile *f);
+struct FileId {
+    uint32_t volume_serial = 0;
+    uint64_t file_index = 0;
+    bool operator==(const FileId &o) const {
+        return volume_serial == o.volume_serial && file_index == o.file_index;
+    }
+};
 
-/* 带偏移读（不改顺序读位置）。返回 0 成功，*out_n 为实际读到的字节
- * （文件尾可短于 len）；-1 为寻道/读取错误。 */
-int cdc_file_read_at(CdcFile *f, uint64_t offset, uint8_t *buf, size_t len, size_t *out_n);
+// OpenFileById 用的盘符根句柄（Windows）；Linux 恒为空。
+struct DriveHintCloser {
+    void operator()(void *h) const;
+};
+using DriveHint = std::unique_ptr<void, DriveHintCloser>;
+DriveHint open_drive_hint(char drive_letter);
 
-/* 顺序读。返回 0 成功（EOF 时 *out_n < len）；-1 为读取错误。 */
-int cdc_file_read_seq(CdcFile *f, uint8_t *buf, size_t len, size_t *out_n);
+// 已打开的只读文件（Windows HANDLE / Linux fd），move-only。
+class File {
+public:
+    File() = default;
+    File(File &&) noexcept = default;
+    File &operator=(File &&) noexcept = default;
+    explicit operator bool() const { return static_cast<bool>(h_); }
 
-/* 查已打开文件的硬链接标识：links>1 且 index!=0 时返回 1 并填 out。 */
-int cdc_file_identity(CdcFile *f, CdcFileId *out);
+    // 打开并校验：SKIP 属性返回空 File；frn!=0 且 hint 非空时优先 OpenFileById，
+    // 失败回退按路径打开。has_file_id：仅 links>1 且 index!=0 时为 true；
+    // actual_size_out 为句柄看到的大小（失败时不写）。三个出参均可为空。
+    static File open_checked(const char *path, uint64_t frn, uint32_t flags, void *hint,
+                             bool *has_file_id, FileId *file_id_out, uint64_t *actual_size_out);
 
-/* 仅查元数据标识：不读内容。返回 1=有硬链接标识（links>1），0=无/打不开。 */
-int cdc_query_file_identity(const char *path, CdcFileId *out);
+    // 带偏移读。返回 0 成功，out_n 为实际读到的字节（文件尾可短于 len）；-1 为错误。
+    int read_at(uint64_t offset, uint8_t *buf, size_t len, size_t &out_n);
+    // 顺序读。返回 0 成功（EOF 时 out_n < len）；-1 为读取错误。
+    int read_seq(uint8_t *buf, size_t len, size_t &out_n);
+    // 硬链接标识：links>1 且 index!=0 时返回 true 并填 out。
+    bool identity(FileId &out) const;
 
-/* 仅 Windows：打开盘符根句柄（OpenFileById 的 hint）；用完 CloseHandle。
- * Linux 返回 NULL。 */
-void *cdc_open_drive_hint(char drive_letter);
-
-typedef struct {
-    size_t idx;
-    uint64_t offset;
-    size_t want;
-} CdcRawHeadTarget;
-
-typedef struct {
-    size_t idx;
-    uint8_t digest[32]; /* XXH3-64 载体编码（见 sampling.h），不是 BLAKE3 */
-} CdcHeadResult;
-
-/* 卷句柄 LCN 合并直读。返回成功算出摘要的条数（写入 out，容量 n）。
- * Linux：恒返回 0（由调用方走 IOCP 等价路径）。 */
-size_t cdc_coalesced_raw_volume_heads(char drive_letter, const CdcRawHeadTarget *targets,
-                                      size_t n, int is_ssd, volatile int *cancel,
-                                      void (*on_tick)(void *), void *tick_ctx,
-                                      CdcHeadResult *out);
-
-typedef struct {
-    size_t idx;
-    char *path; /* 调用方拥有 */
-    uint64_t frn;
-    size_t want;
-} CdcIocpRequest;
-
-typedef struct {
-    size_t idx;
-    uint8_t digest[32]; /* XXH3-64 载体编码（见 sampling.h），不是 BLAKE3 */
-    int has_file_id;
-    CdcFileId file_id;
-} CdcIocpResult;
-
-/* OpenFileById + IOCP 批量读头。Windows：真 IOCP；Linux：顺序等价实现。
- * 每个请求恰好回调一次 on_tick（成功、失败、跳过都算）。返回结果条数。 */
-size_t cdc_iocp_read_heads(const CdcIocpRequest *reqs, size_t n, size_t concurrency,
-                           volatile int *cancel, void (*on_tick)(void *), void *tick_ctx,
-                           CdcIocpResult *out);
-
-/* 磁盘类型探测（frag.rs 的 is_ssd / physical_disk_id 的最小移植）。
- * cdc_is_ssd：1=SSD，0=HDD，-1=未知（调用方按 SSD 处理，与 Rust 的 unwrap_or(true) 一致）。
- * cdc_physical_disk_id：0=成功并填 out。 */
-int cdc_is_ssd(const char *drive);
-int cdc_physical_disk_id(const char *drive, uint32_t *dev_type, uint32_t *dev_num);
-
-/* ---------------- 并行（线程池式 parallel-for） ---------------- */
-/* 跨平台线程池：POSIX pthread / Windows CreateThread（复用 mft.c 的
- * 跨平台线程模式：调用线程也参与干活）。
- * cdc_par_for(n, nthreads, fn, ctx)：把下标 [0,n) 分给 worker，
- * 每个下标恰好被一个 worker 处理一次；nthreads<=1 或 n<=1 时顺序执行；
- * 建线程失败时退化为更少线程（剩余工作由已建线程 + 调用线程跑完，
- * 不报错、不丢下标）。fn 不得假设调用顺序。
- * fn 内共享的回调（如 on_tick）与共享小状态（如 drive hint 缓存）
- * 必须用 cdc_shared_lock() 串行化。
- * 返回 0 成功；-1 仅表示 fn 为 NULL。 */
-typedef void (*cdc_par_work_fn)(void *ctx, size_t idx);
-int cdc_par_for(size_t n, size_t nthreads, cdc_par_work_fn fn, void *ctx);
-/* 在线逻辑 CPU 数（>=1）。 */
-size_t cdc_par_cpu_count(void);
-/* 哈希阶段的 worker 数策略：SSD 激进（min(ncpu, 32)）、HDD 保守
- *（min(ncpu, 4)）；至少 1。NVMe 上放宽并发上限即指 SSD 这档。 */
-size_t cdc_par_hash_workers(int is_ssd);
-/* 共享小状态锁：并行 worker 回调 on_tick、读写 drive hint 缓存等
- * 共享小状态时持有。只包极短临界区，不跨越 I/O。 */
-void cdc_shared_lock(void);
-void cdc_shared_unlock(void);
-
+private:
+#ifdef _WIN32
+    UniqueHandle h_;
+#else
+    UniqueFd h_;
 #endif
+};
+
+// 仅查元数据标识：不读内容。返回 true=有硬链接标识（links>1）。
+bool query_file_identity(const char *path, FileId &out);
+
+struct RawHeadTarget {
+    size_t idx = 0;
+    uint64_t offset = 0;
+    size_t want = 0;
+};
+
+struct HeadResult {
+    size_t idx = 0;
+    uint8_t digest[32] = {};  // XXH3-64 载体编码（见 sampling.h），不是 BLAKE3
+};
+
+using TickFn = FunctionRef<void()>;
+
+// 卷句柄 LCN 合并直读。返回成功算出摘要的结果。Linux：恒返回空。
+std::vector<HeadResult> coalesced_raw_volume_heads(char drive_letter,
+                                                   std::span<const RawHeadTarget> targets,
+                                                   bool is_ssd, const volatile int *cancel,
+                                                   TickFn on_tick);
+
+struct IocpRequest {
+    size_t idx = 0;
+    const char *path = nullptr;  // 借用（调用方拥有）
+    uint64_t frn = 0;
+    size_t want = 0;
+};
+
+struct IocpResult {
+    size_t idx = 0;
+    uint8_t digest[32] = {};  // XXH3-64 载体编码（见 sampling.h），不是 BLAKE3
+    bool has_file_id = false;
+    FileId file_id;
+};
+
+// OpenFileById + IOCP 批量读头。Windows：真 IOCP；Linux：并行等价实现。
+// 每个请求恰好回调一次 on_tick（成功、失败、跳过都算；取消后未处理的不回调）。
+std::vector<IocpResult> iocp_read_heads(std::span<const IocpRequest> reqs, size_t concurrency,
+                                        const volatile int *cancel, TickFn on_tick);
+
+// 磁盘类型探测（frag.rs 的 is_ssd / physical_disk_id 的最小移植）。
+// is_ssd：1=SSD，0=HDD，-1=未知（调用方按 SSD 处理，与 Rust 的 unwrap_or(true) 一致）。
+int is_ssd(const char *drive);
+// 0=成功并填出参。
+int physical_disk_id(const char *drive, uint32_t &dev_type, uint32_t &dev_num);
+
+// ---------------- 并行（线程池式 parallel-for） ----------------
+
+// 把下标 [0,n) 分给 worker，每个下标恰好被处理一次；调用线程也参与干活。
+// nthreads<=1 或 n<=1 时顺序执行；建线程失败时退化为更少线程（不报错、不丢下标）。
+// fn 内共享的回调与共享小状态必须用 shared_mutex() 串行化。
+// 返回 0 成功；-1 仅表示 fn 为空。
+int par_for(size_t n, size_t nthreads, FunctionRef<void(size_t)> fn);
+size_t par_cpu_count();  // 在线逻辑 CPU 数（>=1）
+// 哈希阶段的 worker 数策略：SSD 激进（min(ncpu, 32)）、HDD 保守（min(ncpu, 4)）。
+size_t par_hash_workers(bool is_ssd);
+
+// 共享小状态锁：只包极短临界区，不跨越 I/O。
+Mutex &shared_mutex();
+
+}  // namespace cdc

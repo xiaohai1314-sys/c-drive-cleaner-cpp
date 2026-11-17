@@ -1911,7 +1911,7 @@ static int h_frag_analyze(const char *args_json, char **out_json,
         cdc_task_finish("frag_analyze", "ok", "碎片率 0.0%");
         return gui_ok_json(out_json, report);
     }
-    int ssd = cdc_is_ssd(drive_buf);
+    int ssd = cdc::is_ssd(drive_buf);
     if (ssd < 0) ssd = 1; /* 未知按 SSD 处理（Rust unwrap_or(true)）。 */
     char *defrag = cdc_system32_path("defrag.exe");
     char argbuf[32];
@@ -2337,10 +2337,7 @@ static char *gui_dup_cache_path(const char *key) {
     return p;
 }
 
-static void gui_dup_tick(void *ctx) {
-    (void)ctx;
-    cdc_scan_add_done("dup", 1);
-}
+static void gui_dup_tick() { cdc_scan_add_done("dup", 1); }
 
 static int h_scan_dups(const char *args_json, char **out_json,
                        char **out_error) {
@@ -2432,28 +2429,24 @@ static int h_scan_dups(const char *args_json, char **out_json,
     }
     /* 实时扫描。 */
     cdc_scan_stage("dup", "枚举文件");
-    const char **r = (const char **)roots;
-    CdcScanOpts opts;
-    memset(&opts, 0, sizeof(opts));
+    cdc::ScanOpts opts;
     opts.cancel = &g_dup_cancel;
     opts.on_tick = gui_dup_tick;
-    opts.tick_ctx = NULL;
     opts.trace = getenv("CDC_TRACE") != NULL;
-    opts.fast = fast;
-    CdcDupGroupList out;
-    memset(&out, 0, sizeof(out));
-    int rc = cdc_scan_dups(r, nroots, min, &opts, &out);
+    opts.fast = fast != 0;
+    cdc::DupGroupList out;
+    int rc = cdc::scan_dups(std::span<const char *const>(roots, nroots), min, opts, out);
     int cancelled = cdc_scan_cancelled("dup") || *opts.cancel;
     cJSON *arr = cJSON_CreateArray();
     if (rc == 0 && arr) {
-        for (size_t i = 0; i < out.n; i++) {
-            CdcDupGroup *g = &out.items[i];
-            cJSON *gj = gui_dup_group_json(g->hash_hex, g->size, g->files,
-                                           g->mtimes, g->n_files);
+        for (cdc::DupGroup &g : out) {
+            std::vector<char *> files;
+            for (std::string &f : g.files) files.push_back(f.data());
+            cJSON *gj = gui_dup_group_json(g.hash_hex.c_str(), g.size, files.data(),
+                                           g.mtimes.data(), files.size());
             if (gj) cJSON_AddItemToArray(arr, gj);
         }
     }
-    cdc_dup_group_list_free(&out);
     cdc_scan_set_found("dup", (uint64_t)(arr ? cJSON_GetArraySize(arr) : 0));
     cdc_scan_end("dup", "完成");
     /* 未取消且非空时写回 JSON 缓存（供下次 5 分钟内复用）。 */
@@ -2499,26 +2492,22 @@ static int h_scan_big(const char *args_json, char **out_json,
         gui_free_str_array(drives, ndrives);
         return gui_ok_json(out_json, rows);
     }
-    const char **d = (const char **)drives;
-    CdcScanOpts opts;
-    memset(&opts, 0, sizeof(opts));
+    cdc::ScanOpts opts;
     opts.cancel = &g_big_cancel;
     opts.trace = getenv("CDC_TRACE") != NULL;
-    CdcBigFileList out;
-    memset(&out, 0, sizeof(out));
-    int rc = cdc_scan_big(d, ndrives, &opts, &out);
+    cdc::BigFileList out;
+    int rc = cdc::scan_big(std::span<const char *const>(drives, ndrives), opts, out);
     cJSON *arr = cJSON_CreateArray();
     if (rc == 0 && arr) {
-        for (size_t i = 0; i < out.n; i++) {
+        for (const cdc::BigFile &bf : out) {
             cJSON *o = cJSON_CreateObject();
             if (!o) continue;
-            cJSON_AddStringToObject(o, "path", out.items[i].path);
-            cJSON_AddNumberToObject(o, "size", (double)out.items[i].size);
-            cJSON_AddNumberToObject(o, "mtime", (double)out.items[i].mtime);
+            cJSON_AddStringToObject(o, "path", bf.path.c_str());
+            cJSON_AddNumberToObject(o, "size", (double)bf.size);
+            cJSON_AddNumberToObject(o, "mtime", (double)bf.mtime);
             cJSON_AddItemToArray(arr, o);
         }
     }
-    cdc_big_file_list_free(&out);
     cdc_scan_end("big", "完成");
     gui_free_str_array(drives, ndrives);
     if (!arr) return gui_fail(out_error, "内存不足");
@@ -2825,7 +2814,7 @@ static int h_delete_dups(const char *args_json, char **out_json,
     for (size_t i = 0; i < npaths_to_hash; i++) {
         const char *p = i < nkeepers ? keepers[i] : pending[i - nkeepers].path;
         uint8_t digest[32];
-        if (cdc_full_hash_file(p, 0, digest) == 0) {
+        if (cdc::full_hash_file(p, 0, digest) == 0) {
             char hex[65];
             cdc_digest_to_hex((const cdc_digest_t *)digest, hex);
             hashed[i] = gui_strdup(hex);

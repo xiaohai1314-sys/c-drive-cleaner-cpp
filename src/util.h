@@ -126,6 +126,8 @@ public:
     FunctionRef(std::nullptr_t) {}
     template <class F,
               class = std::enable_if_t<!std::is_same_v<std::decay_t<F>, FunctionRef> &&
+                                       !std::is_function_v<std::remove_reference_t<F>> &&
+                                       !std::is_pointer_v<std::decay_t<F>> &&
                                        std::is_invocable_r_v<R, F &, Args...>>>
     FunctionRef(F &&f)  // NOLINT(google-explicit-constructor)
         : obj_(const_cast<void *>(static_cast<const void *>(&f))),
@@ -134,11 +136,19 @@ public:
                   std::forward<Args>(args)...);
           }) {}
 
-    explicit operator bool() const { return call_ != nullptr; }
-    R operator()(Args... args) const { return call_(obj_, std::forward<Args>(args)...); }
+    // 普通函数 / 函数指针：指针本身按值保存（不引用临时量）。
+    FunctionRef(R (*fp)(Args...))  // NOLINT(google-explicit-constructor)
+        : fp_(fp) {}
+
+    explicit operator bool() const { return call_ != nullptr || fp_ != nullptr; }
+    R operator()(Args... args) const {
+        if (fp_) return fp_(std::forward<Args>(args)...);
+        return call_(obj_, std::forward<Args>(args)...);
+    }
 
 private:
     void *obj_ = nullptr;
+    R (*fp_)(Args...) = nullptr;
     R (*call_)(void *, Args...) = nullptr;
 };
 
