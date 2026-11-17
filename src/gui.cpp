@@ -2180,9 +2180,8 @@ static cJSON *gui_query_dups_from_index(char **roots, size_t nroots,
                     flat[nflat].size = r->size;
                     flat[nflat].has_digest =
                         fast ? r->digests.has_strong : r->digests.has_full;
-                    cdc_digest_to_hex(
-                        fast ? &r->digests.strong : &r->digests.full,
-                        flat[nflat].hex);
+                    cdc::digest_to_hex(fast ? r->digests.strong : r->digests.full,
+                                       flat[nflat].hex);
                     flat[nflat].path = r->path;
                     flat[nflat].mtime = r->mtime;
                     nflat++;
@@ -2816,7 +2815,7 @@ static int h_delete_dups(const char *args_json, char **out_json,
         uint8_t digest[32];
         if (cdc::full_hash_file(p, 0, digest) == 0) {
             char hex[65];
-            cdc_digest_to_hex((const cdc_digest_t *)digest, hex);
+            cdc::digest_to_hex(*(const cdc_digest_t *)digest, hex);
             hashed[i] = gui_strdup(hex);
         }
         cdc_task_add_done("dup_delete", 1);

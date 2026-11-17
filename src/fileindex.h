@@ -123,6 +123,13 @@ typedef struct {
     char *path;
 } cdc_index_big_row_t;
 
+/* TRANSITIONAL：C++ 名字，fileindex 迁移时成为正式定义。 */
+namespace cdc {
+using Digest = cdc_digest_t;
+using DigestSet = cdc_digest_set_t;
+using DigestUpdate = cdc_digest_update_t;
+}  // namespace cdc
+
 typedef struct cdc_fileindex cdc_fileindex_t;
 
 /* 打开索引库（建父目录 + 建表 + PRAGMA）。失败返回 NULL，err 可空。

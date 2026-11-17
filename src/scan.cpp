@@ -17,6 +17,8 @@
 #include "scan.h"
 
 #include <algorithm>
+#include <memory>
+#include <optional>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -391,7 +393,7 @@ size_t dedup_hardlinks(CandVec::iterator first, CandVec::iterator last) {
     return static_cast<size_t>(w - first);
 }
 
-void flush_candidate_hashes(cdc_hashcache_t *cache, const CandVec &items, uint64_t now) {
+void flush_candidate_hashes(HashCache *cache, const CandVec &items, uint64_t now) {
     if (!cache) return;
     for (const DupCandidate &c : items) {
         if (!(c.dirty_head_xxh || c.dirty_sample_xxh || c.dirty_strong_xxh || c.dirty_full))
@@ -415,7 +417,7 @@ void flush_candidate_hashes(cdc_hashcache_t *cache, const CandVec &items, uint64
             sub.has_full = 1;
             sub.full = c.digests.full;
         }
-        cdc_hashcache_remember(cache, c.path.c_str(), c.size, c.mtime, &sub, now);
+        cache->remember(c.path, c.size, c.mtime, sub, now);
     }
 }
 
@@ -815,7 +817,7 @@ void split_dup_candidates(CandVec &cands, bool fast, CandVec &ready, CandVec &ss
 }
 
 // SSD 与混合两路顺序跑完，摘要回写缓存，返回（最终组候选，淘汰候选）。
-void run_dup_pipelines(CandVec ssd_stage1, CandVec mixed_stage1, cdc_hashcache_t *cache,
+void run_dup_pipelines(CandVec ssd_stage1, CandVec mixed_stage1, HashCache *cache,
                        uint64_t now, const ScanOpts &opts, const char *ssd_label,
                        const char *mixed_label, CandVec &out_final, CandVec &out_elim) {
     if (ssd_stage1.empty() && mixed_stage1.empty()) return;
@@ -826,7 +828,7 @@ void run_dup_pipelines(CandVec ssd_stage1, CandVec mixed_stage1, cdc_hashcache_t
     flush_candidate_hashes(cache, ssd_final, now);
     flush_candidate_hashes(cache, mixed_elim, now);
     flush_candidate_hashes(cache, mixed_final, now);
-    if (cache) cdc_hashcache_save_dirty(cache);
+    if (cache) cache->save_dirty();
     move_all(out_final, ssd_final);
     move_all(out_final, mixed_final);
     move_all(out_elim, ssd_elim);
@@ -841,7 +843,7 @@ std::string final_digest_hex(const DupCandidate &c, bool fast) {
     if (fast)
         xxh_to_hex(c.digests.strong_xxh, buf);
     else
-        cdc_digest_to_hex(&c.digests.full, buf);
+        digest_to_hex(c.digests.full, buf);
     return buf;
 }
 
@@ -897,7 +899,7 @@ void build_dup_groups(CandVec items, bool fast, DupGroupList &out) {
     });
 }
 
-DupCandidate candidate_from_entry(const FileEntry &e, uint64_t mtime, cdc_hashcache_t *cache,
+DupCandidate candidate_from_entry(const FileEntry &e, uint64_t mtime, HashCache *cache,
                                   DiskCache &dcache) {
     DupCandidate c;
     c.path = e.path;
@@ -911,8 +913,7 @@ DupCandidate candidate_from_entry(const FileEntry &e, uint64_t mtime, cdc_hashca
     c.disk = dcache.key_for_path(e.path);
     c.is_ssd = c.disk.kind == DiskKind::Ssd;
     if (cache) {
-        cdc_digest_set_t ce{};
-        if (cdc_hashcache_entry_for(cache, e.path.c_str(), e.size, mtime, &ce) == 1) c.digests = ce;
+        if (auto ce = cache->entry_for(e.path, e.size, mtime)) c.digests = *ce;
     }
     return c;
 }
@@ -934,7 +935,7 @@ int full_hash_file(const char *path, uint64_t frn, uint8_t digest[32]) {
 
 // ---------------- 哈希管线入口（对照 main.rs 的 hash_index_groups） ----------------
 
-int scan_hash_groups(std::span<const ScanInput> inputs, cdc_hashcache_t *cache, uint64_t now,
+int scan_hash_groups(std::span<const ScanInput> inputs, HashCache *cache, uint64_t now,
                      std::vector<cdc_digest_update_t> &out_updates) {
     out_updates.clear();
     if (inputs.empty()) return 0;
@@ -954,8 +955,8 @@ int scan_hash_groups(std::span<const ScanInput> inputs, cdc_hashcache_t *cache, 
         c.is_ssd = c.disk.kind == DiskKind::Ssd;
         c.digests = in.digests;
         if (cache) {
-            cdc_digest_set_t ce{};
-            if (cdc_hashcache_entry_for(cache, in.path, in.size, in.mtime, &ce) == 1) {
+            if (std::optional<DigestSet> hit = cache->entry_for(in.path, in.size, in.mtime)) {
+                const DigestSet &ce = *hit;
                 cdc_digest_set_t &d = c.digests;
                 if (!d.has_head && ce.has_head) d.has_head = 1, d.head = ce.head;
                 if (!d.has_sample && ce.has_sample) d.has_sample = 1, d.sample = ce.sample;
@@ -1063,7 +1064,8 @@ int scan_dups(std::span<const char *const> roots, uint64_t min_size, const ScanO
     paths.reserve(candidates_count);
     for (auto [i, j] : runs)
         for (size_t m = i; m < j; m++) paths.push_back(all[m].path.c_str());
-    cdc_hashcache_t *cache = cdc_hashcache_load_for_paths(paths.data(), paths.size());
+    std::unique_ptr<HashCache> owned_cache = HashCache::load_for_paths(paths);
+    HashCache *cache = owned_cache.get();
     uint64_t stamp_now = now_seconds();
     CandVec cands;
     cands.reserve(candidates_count);
@@ -1083,10 +1085,7 @@ int scan_dups(std::span<const char *const> roots, uint64_t min_size, const ScanO
         CandVec final_items, eliminated;
         run_dup_pipelines(std::move(ssd_stage1), std::move(mixed_stage1), cache, stamp_now, opts,
                           "ssd", "hdd+mixed", final_items, eliminated);
-        if (is_cancelled(opts)) {
-            if (cache) cdc_hashcache_close(cache);
-            return 0;
-        }
+        if (is_cancelled(opts)) return 0;
         for (DupCandidate &c : final_items)
             if (opts.fast ? c.digests.has_strong_xxh : c.digests.has_full)
                 ready.push_back(std::move(c));
@@ -1095,7 +1094,6 @@ int scan_dups(std::span<const char *const> roots, uint64_t min_size, const ScanO
     sort_dup_groups(out);
     if (opts.trace)
         std::fprintf(stderr, "dup: 找到 %zu 组, 总用时 %.1fs\n", out.size(), now_mono() - started);
-    if (cache) cdc_hashcache_close(cache);
     return 0;
 }
 

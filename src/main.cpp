@@ -470,7 +470,9 @@ static void hash_index_groups(cdc_fileindex_t *idx, uint64_t serial, uint64_t st
         return;
     }
     for (size_t i = 0; i < n; i++) paths[i] = rows[i].path;
-    cdc_hashcache_t *cache = cdc_hashcache_load_for_paths(paths, n);
+    std::unique_ptr<cdc::HashCache> cache_owner =
+        cdc::HashCache::load_for_paths(std::span<const char *const>(paths, paths ? n : 0));
+    cdc::HashCache *cache = cache_owner.get();
     free(paths);
 
     std::vector<cdc::ScanInput> inputs(n);
@@ -478,10 +480,8 @@ static void hash_index_groups(cdc_fileindex_t *idx, uint64_t serial, uint64_t st
     for (size_t i = 0; i < n; i++) {
         cdc_digest_set_t merged = rows[i].digests;
         if (cache) {
-            cdc_digest_set_t ce;
-            memset(&ce, 0, sizeof(ce));
-            if (cdc_hashcache_entry_for(cache, rows[i].path, rows[i].size,
-                                        rows[i].mtime, &ce) == 1) {
+            if (std::optional<cdc::DigestSet> hit = cache->entry_for(rows[i].path, rows[i].size, rows[i].mtime)) {
+                const cdc_digest_set_t ce = *hit;
                 if (!rows[i].digests.has_full && ce.has_full) (*out_reused)++;
                 cdc_digest_set_t tmp;
                 merge_digests(&tmp, &rows[i].digests, &ce);
@@ -507,7 +507,6 @@ static void hash_index_groups(cdc_fileindex_t *idx, uint64_t serial, uint64_t st
         }
         *out_new = upd_full > merged_full ? upd_full - merged_full : 0;
     }
-    if (cache) cdc_hashcache_close(cache);
     cdc_index_hash_rows_free(rows, n);
 }
 
@@ -629,13 +628,14 @@ static idx_outcome_t index_volume_backfill(cdc_fileindex_t *idx, const char *dri
             for (size_t i = 0; i < n_res; i++) paths[i] = res[i].path.c_str();
         }
     }
-    cdc_hashcache_t *cache = cdc_hashcache_load_for_paths(paths, n_res);
+    std::unique_ptr<cdc::HashCache> cache_owner =
+        cdc::HashCache::load_for_paths(std::span<const char *const>(paths, paths ? n_res : 0));
+    cdc::HashCache *cache = cache_owner.get();
     free(paths);
     cdc_digest_set_t *seeded = NULL;
     if (n_res > 0) {
         seeded = (cdc_digest_set_t *)calloc(n_res, sizeof(*seeded));
         if (!seeded) {
-            if (cache) cdc_hashcache_close(cache);
             o.elapsed_secs = now_mono() - started;
             return o;
         }
@@ -643,7 +643,6 @@ static idx_outcome_t index_volume_backfill(cdc_fileindex_t *idx, const char *dri
     uint64_t reused_full = 0;
     cdc_vec_t reuse_v;
     if (cdc_vec_init(&reuse_v, sizeof(cdc_digest_update_t)) != CDC_OK) {
-        if (cache) cdc_hashcache_close(cache);
         free(seeded);
         o.elapsed_secs = now_mono() - started;
         return o;
@@ -664,10 +663,8 @@ static idx_outcome_t index_volume_backfill(cdc_fileindex_t *idx, const char *dri
             if (e) merged = e->digests;
         }
         if (cache) {
-            cdc_digest_set_t ce;
-            memset(&ce, 0, sizeof(ce));
-            if (cdc_hashcache_entry_for(cache, res[i].path.c_str(), res[i].size,
-                                        res[i].mtime, &ce) == 1) {
+            if (std::optional<cdc::DigestSet> hit = cache->entry_for(res[i].path.c_str(), res[i].size, res[i].mtime)) {
+                const cdc_digest_set_t ce = *hit;
                 cdc_digest_set_t tmp;
                 merge_digests(&tmp, &merged, &ce);
                 merged = tmp;
@@ -715,7 +712,6 @@ static idx_outcome_t index_volume_backfill(cdc_fileindex_t *idx, const char *dri
         }
     }
     uint64_t newly = upd_full > reused_full ? upd_full - reused_full : 0;
-    if (cache) cdc_hashcache_close(cache);
     double elapsed = now_mono() - started;
     char line[1024];
     snprintf(line, sizeof(line),

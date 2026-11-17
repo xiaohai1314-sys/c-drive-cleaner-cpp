@@ -18,7 +18,7 @@
 #include <vector>
 
 #include "fileindex.h"  // cdc_digest_set_t / cdc_digest_update_t
-#include "hashcache.h"  // cdc_hashcache_t
+#include "hashcache.h"  // HashCache
 #include "util.h"       // FunctionRef
 
 namespace cdc {
@@ -74,7 +74,7 @@ struct ScanInput {
 // 返回 0 时 out_updates 为每个"算完仍有任一摘要"的候选一条；-1 表示管线
 // 整体失败。注意：updates 的 volume_serial 填 0——调用方在
 // set_digests_batch 之前必须按卷填好。
-int scan_hash_groups(std::span<const ScanInput> inputs, cdc_hashcache_t *cache, uint64_t now,
+int scan_hash_groups(std::span<const ScanInput> inputs, HashCache *cache, uint64_t now,
                      std::vector<cdc_digest_update_t> &out_updates);
 
 // 大文件：按最低档 2MB 枚举（keep 过滤用文件名算分档阈值），再排除系统文件名、
