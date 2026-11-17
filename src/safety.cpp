@@ -1452,7 +1452,7 @@ int cdc_walk_dir(const char *root, int min_depth, cdc_walk_fn fn, void *ctx,
                 uint64_t ft = ((uint64_t)fad.ftLastWriteTime.dwHighDateTime
                                << 32) |
                               fad.ftLastWriteTime.dwLowDateTime;
-                mtime = mft_filetime_to_unix(ft);
+                mtime = cdc::mft_filetime_to_unix(ft);
                 if (!is_dir)
                     size = ((uint64_t)fad.nFileSizeHigh << 32) |
                            fad.nFileSizeLow;

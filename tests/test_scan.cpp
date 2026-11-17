@@ -281,10 +281,10 @@ static void test_parse(void) {
         rec_fn(&r, (3ULL << 48) | 5, "video.mp4", 1);
         rec_data_nonres(&r, 4 * MB, RUN_LCN5, sizeof RUN_LCN5, 0);
         rec_end(&r);
-        CdcParsedRecord out;
-        CHECK_INT(cdc_parse_record_in_place(r.buf, sizeof r.buf, 20, 512, 4096, MB, &out), 0, "file rc");
-        CHECK_INT(out.kind, CDC_REC_FILE, "file kind");
-        CHECK_STREQ(out.name, "video.mp4", "file name");
+        cdc::ParsedRecord out;
+        CHECK_INT(cdc::parse_record_in_place(r.buf, sizeof r.buf, 20, 512, 4096, MB, out), 0, "file rc");
+        CHECK_INT((int)out.kind, (int)cdc::RecordKind::File, "file kind");
+        CHECK_STREQ(out.name.c_str(), "video.mp4", "file name");
         CHECK_U64(out.frn, (1ULL << 48) | 20, "file frn");
         CHECK_U64(out.parent_frn, (3ULL << 48) | 5, "file parent");
         CHECK_U64(out.size, 4 * MB, "file size");
@@ -292,7 +292,6 @@ static void test_parse(void) {
         CHECK_U64(out.first_lcn, 5, "file first_lcn");
         CHECK_U64(out.sort_key, 5, "file sort_key");
         CHECK_INT(out.can_raw_read, 1, "file can_raw_read");
-        cdc_parsed_record_free(&out);
     }
 
     /* (b) 压缩属性 => can_raw_read=0，其余同 (a)。 */
@@ -303,11 +302,10 @@ static void test_parse(void) {
         rec_fn(&r, (3ULL << 48) | 5, "video.mp4", 1);
         rec_data_nonres(&r, 4 * MB, RUN_LCN5, sizeof RUN_LCN5, 0);
         rec_end(&r);
-        CdcParsedRecord out;
-        cdc_parse_record_in_place(r.buf, sizeof r.buf, 20, 512, 4096, MB, &out);
-        CHECK_INT(out.kind, CDC_REC_FILE, "compressed kind");
+        cdc::ParsedRecord out;
+        cdc::parse_record_in_place(r.buf, sizeof r.buf, 20, 512, 4096, MB, out);
+        CHECK_INT((int)out.kind, (int)cdc::RecordKind::File, "compressed kind");
         CHECK_INT(out.can_raw_read, 0, "compressed can_raw_read");
-        cdc_parsed_record_free(&out);
     }
 
     /* (c) 稀疏 data_flags 0x8000 => can_raw_read=0。 */
@@ -318,11 +316,10 @@ static void test_parse(void) {
         rec_fn(&r, (3ULL << 48) | 5, "video.mp4", 1);
         rec_data_nonres(&r, 4 * MB, RUN_LCN5, sizeof RUN_LCN5, 0x8000);
         rec_end(&r);
-        CdcParsedRecord out;
-        cdc_parse_record_in_place(r.buf, sizeof r.buf, 20, 512, 4096, MB, &out);
-        CHECK_INT(out.kind, CDC_REC_FILE, "sparse kind");
+        cdc::ParsedRecord out;
+        cdc::parse_record_in_place(r.buf, sizeof r.buf, 20, 512, 4096, MB, out);
+        CHECK_INT((int)out.kind, (int)cdc::RecordKind::File, "sparse kind");
         CHECK_INT(out.can_raw_read, 0, "sparse can_raw_read");
-        cdc_parsed_record_free(&out);
     }
 
     /* (d) size 100 < min_size 1MB => Skip。 */
@@ -333,10 +330,9 @@ static void test_parse(void) {
         rec_fn(&r, (3ULL << 48) | 5, "tiny.txt", 1);
         rec_data_nonres(&r, 100, RUN_LCN5, sizeof RUN_LCN5, 0);
         rec_end(&r);
-        CdcParsedRecord out;
-        cdc_parse_record_in_place(r.buf, sizeof r.buf, 21, 512, 4096, MB, &out);
-        CHECK_INT(out.kind, CDC_REC_SKIP, "tiny skip");
-        cdc_parsed_record_free(&out);
+        cdc::ParsedRecord out;
+        cdc::parse_record_in_place(r.buf, sizeof r.buf, 21, 512, 4096, MB, out);
+        CHECK_INT((int)out.kind, (int)cdc::RecordKind::Skip, "tiny skip");
     }
 
     /* (e) 目录：flags=3，reparse 属性 0x400 => DIR + reparse=1。 */
@@ -346,14 +342,13 @@ static void test_parse(void) {
         rec_si(&r, ft_unix(1700000000), 0x400);
         rec_fn(&r, 5, "Users", 1);
         rec_end(&r);
-        CdcParsedRecord out;
-        cdc_parse_record_in_place(r.buf, sizeof r.buf, 10, 512, 4096, MB, &out);
-        CHECK_INT(out.kind, CDC_REC_DIR, "dir kind");
-        CHECK_STREQ(out.name, "Users", "dir name");
+        cdc::ParsedRecord out;
+        cdc::parse_record_in_place(r.buf, sizeof r.buf, 10, 512, 4096, MB, out);
+        CHECK_INT((int)out.kind, (int)cdc::RecordKind::Dir, "dir kind");
+        CHECK_STREQ(out.name.c_str(), "Users", "dir name");
         CHECK_INT(out.seq, 3, "dir seq");
         CHECK_INT(out.reparse, 1, "dir reparse");
         CHECK_U64(out.parent_frn, 5, "dir parent");
-        cdc_parsed_record_free(&out);
     }
 
     /* (f) $ 开头的文件名 => Skip。 */
@@ -364,10 +359,9 @@ static void test_parse(void) {
         rec_fn(&r, (3ULL << 48) | 5, "$foo", 1);
         rec_data_nonres(&r, 4 * MB, RUN_LCN5, sizeof RUN_LCN5, 0);
         rec_end(&r);
-        CdcParsedRecord out;
-        cdc_parse_record_in_place(r.buf, sizeof r.buf, 22, 512, 4096, MB, &out);
-        CHECK_INT(out.kind, CDC_REC_SKIP, "dollar skip");
-        cdc_parsed_record_free(&out);
+        cdc::ParsedRecord out;
+        cdc::parse_record_in_place(r.buf, sizeof r.buf, 22, 512, 4096, MB, out);
+        CHECK_INT((int)out.kind, (int)cdc::RecordKind::Skip, "dollar skip");
     }
 
     /* (g) 扩展记录（u64@32 != 0，index != 0）=> Skip。 */
@@ -379,10 +373,9 @@ static void test_parse(void) {
         rec_fn(&r, (3ULL << 48) | 5, "video.mp4", 1);
         rec_data_nonres(&r, 4 * MB, RUN_LCN5, sizeof RUN_LCN5, 0);
         rec_end(&r);
-        CdcParsedRecord out;
-        cdc_parse_record_in_place(r.buf, sizeof r.buf, 23, 512, 4096, MB, &out);
-        CHECK_INT(out.kind, CDC_REC_SKIP, "extension skip");
-        cdc_parsed_record_free(&out);
+        cdc::ParsedRecord out;
+        cdc::parse_record_in_place(r.buf, sizeof r.buf, 23, 512, 4096, MB, out);
+        CHECK_INT((int)out.kind, (int)cdc::RecordKind::Skip, "extension skip");
     }
 
     /* (h) flags&1 == 0（未在使用中）=> Skip。 */
@@ -393,10 +386,9 @@ static void test_parse(void) {
         rec_fn(&r, (3ULL << 48) | 5, "video.mp4", 1);
         rec_data_nonres(&r, 4 * MB, RUN_LCN5, sizeof RUN_LCN5, 0);
         rec_end(&r);
-        CdcParsedRecord out;
-        cdc_parse_record_in_place(r.buf, sizeof r.buf, 24, 512, 4096, MB, &out);
-        CHECK_INT(out.kind, CDC_REC_SKIP, "not-in-use skip");
-        cdc_parsed_record_free(&out);
+        cdc::ParsedRecord out;
+        cdc::parse_record_in_place(r.buf, sizeof r.buf, 24, 512, 4096, MB, out);
+        CHECK_INT((int)out.kind, (int)cdc::RecordKind::Skip, "not-in-use skip");
     }
 
     /* (i) 坏 magic => Skip。 */
@@ -408,10 +400,9 @@ static void test_parse(void) {
         rec_fn(&r, (3ULL << 48) | 5, "video.mp4", 1);
         rec_data_nonres(&r, 4 * MB, RUN_LCN5, sizeof RUN_LCN5, 0);
         rec_end(&r);
-        CdcParsedRecord out;
-        cdc_parse_record_in_place(r.buf, sizeof r.buf, 25, 512, 4096, MB, &out);
-        CHECK_INT(out.kind, CDC_REC_SKIP, "bad magic skip");
-        cdc_parsed_record_free(&out);
+        cdc::ParsedRecord out;
+        cdc::parse_record_in_place(r.buf, sizeof r.buf, 25, 512, 4096, MB, out);
+        CHECK_INT((int)out.kind, (int)cdc::RecordKind::Skip, "bad magic skip");
     }
 
     /* (j) MFT 根（index 0）：runlist {0x31,0x08,0x45,0x23,0x01,0x00}
@@ -422,16 +413,15 @@ static void test_parse(void) {
         rec_init(&r, 1, 1);
         rec_data_nonres(&r, 256 * 1024, RUN_MFT, sizeof RUN_MFT, 0);
         rec_end(&r);
-        CdcParsedRecord out;
-        cdc_parse_record_in_place(r.buf, sizeof r.buf, 0, 512, 4096, MB, &out);
-        CHECK_INT(out.kind, CDC_REC_MFT_ROOT, "mft root kind");
-        CHECK_U64(out.n_runs, 1, "mft root n_runs");
-        if (out.n_runs == 1) {
+        cdc::ParsedRecord out;
+        cdc::parse_record_in_place(r.buf, sizeof r.buf, 0, 512, 4096, MB, out);
+        CHECK_INT((int)out.kind, (int)cdc::RecordKind::MftRoot, "mft root kind");
+        CHECK_U64(out.runs.size(), 1, "mft root n_runs");
+        if (out.runs.size() == 1) {
             CHECK_U64(out.runs[0].vcn, 0, "mft run vcn");
             CHECK_U64(out.runs[0].lcn, 0x12345, "mft run lcn");
             CHECK_U64(out.runs[0].len, 8, "mft run len");
         }
-        cdc_parsed_record_free(&out);
     }
 
     /* (k) 命名空间优先级：DOS 先、Win32 后 => Win32 胜；
@@ -444,10 +434,9 @@ static void test_parse(void) {
         rec_fn(&r, (3ULL << 48) | 5, "video.mp4", 1);
         rec_data_nonres(&r, 4 * MB, RUN_LCN5, sizeof RUN_LCN5, 0);
         rec_end(&r);
-        CdcParsedRecord out;
-        cdc_parse_record_in_place(r.buf, sizeof r.buf, 26, 512, 4096, MB, &out);
-        CHECK_STREQ(out.name, "video.mp4", "ns DOS-then-Win32");
-        cdc_parsed_record_free(&out);
+        cdc::ParsedRecord out;
+        cdc::parse_record_in_place(r.buf, sizeof r.buf, 26, 512, 4096, MB, out);
+        CHECK_STREQ(out.name.c_str(), "video.mp4", "ns DOS-then-Win32");
     }
     {
         Rec r;
@@ -457,10 +446,9 @@ static void test_parse(void) {
         rec_fn(&r, (3ULL << 48) | 5, "VIDEO~1.MP4", 2);
         rec_data_nonres(&r, 4 * MB, RUN_LCN5, sizeof RUN_LCN5, 0);
         rec_end(&r);
-        CdcParsedRecord out;
-        cdc_parse_record_in_place(r.buf, sizeof r.buf, 27, 512, 4096, MB, &out);
-        CHECK_STREQ(out.name, "video.mp4", "ns Win32-then-DOS");
-        cdc_parsed_record_free(&out);
+        cdc::ParsedRecord out;
+        cdc::parse_record_in_place(r.buf, sizeof r.buf, 27, 512, 4096, MB, out);
+        CHECK_STREQ(out.name.c_str(), "video.mp4", "ns Win32-then-DOS");
     }
     {
         Rec r;
@@ -470,10 +458,9 @@ static void test_parse(void) {
         rec_fn(&r, (3ULL << 48) | 5, "video-posix.mp4", 0);
         rec_data_nonres(&r, 4 * MB, RUN_LCN5, sizeof RUN_LCN5, 0);
         rec_end(&r);
-        CdcParsedRecord out;
-        cdc_parse_record_in_place(r.buf, sizeof r.buf, 28, 512, 4096, MB, &out);
-        CHECK_STREQ(out.name, "video-posix.mp4", "ns Win32-then-POSIX");
-        cdc_parsed_record_free(&out);
+        cdc::ParsedRecord out;
+        cdc::parse_record_in_place(r.buf, sizeof r.buf, 28, 512, 4096, MB, out);
+        CHECK_STREQ(out.name.c_str(), "video-posix.mp4", "ns Win32-then-POSIX");
     }
 
     /* (l) resident $DATA：size=内容长，first_lcn=0，can_raw_read=0，
@@ -486,14 +473,13 @@ static void test_parse(void) {
         rec_fn(&r, (3ULL << 48) | 5, "res.txt", 1);
         rec_data_res(&r, CONTENT, 100);
         rec_end(&r);
-        CdcParsedRecord out;
-        cdc_parse_record_in_place(r.buf, sizeof r.buf, 29, 512, 4096, 1, &out);
-        CHECK_INT(out.kind, CDC_REC_FILE, "resident kind");
+        cdc::ParsedRecord out;
+        cdc::parse_record_in_place(r.buf, sizeof r.buf, 29, 512, 4096, 1, out);
+        CHECK_INT((int)out.kind, (int)cdc::RecordKind::File, "resident kind");
         CHECK_U64(out.size, 100, "resident size");
         CHECK_U64(out.first_lcn, 0, "resident first_lcn");
         CHECK_INT(out.can_raw_read, 0, "resident can_raw_read");
         CHECK_U64(out.sort_key, 29, "resident sort_key");
-        cdc_parsed_record_free(&out);
     }
 
     printf("parse_record done\n");
@@ -508,73 +494,56 @@ static void test_snapshot(void) {
     char path[PATH_MAX];
     join_path(path, sizeof path, dir_tmpl, "mft-v3-test.bin");
 
-    CdcSnapshot s;
-    memset(&s, 0, sizeof s);
+    cdc::Snapshot s;
     s.volume_serial = 0x12345678;
     s.journal_id = 0xABCDEF01;
     s.next_usn = 42000;
     s.min_size = 1ULL << 20;
     s.bytes_per_cluster = 4096;
-    s.n_dirs = 1;
-    s.dirs = (CdcDirNode *)calloc(1, sizeof *s.dirs);
-    s.dirs[0].index = 10;
-    s.dirs[0].seq = 3;
-    s.dirs[0].parent_frn = 5;
-    s.dirs[0].name = strdup("Users");
-    s.dirs[0].reparse = 0;
-    s.n_files = 1;
-    s.files = (CdcRawFile *)calloc(1, sizeof *s.files);
-    s.files[0].frn = (1ULL << 48) | 20;
-    s.files[0].parent_frn = (3ULL << 48) | 10;
-    s.files[0].name = strdup("video.mp4");
-    s.files[0].size = 4194304;
-    s.files[0].mtime = 1700000000;
-    s.files[0].first_lcn = 999;
-    s.files[0].sort_key = 999;
-    s.files[0].can_raw_read = 1;
+    s.dirs.push_back(cdc::DirNode{10, 3, 5, "Users", false});
+    s.files.push_back(cdc::RawFile{(1ULL << 48) | 20, (3ULL << 48) | 10, "video.mp4", 4194304,
+                                   1700000000, 999, 999, true});
 
-    CHECK_INT(cdc_snapshot_save(path, &s), 0, "snapshot save");
-    CdcSnapshot back;
-    CHECK_INT(cdc_snapshot_load(path, &back), 0, "snapshot load");
+    CHECK_INT(cdc::snapshot_save(path, s), 0, "snapshot save");
+    cdc::Snapshot back;
+    CHECK_INT(cdc::snapshot_load(path, back), 0, "snapshot load");
     CHECK_U64(back.volume_serial, 0x12345678, "snap serial");
     CHECK_U64(back.journal_id, 0xABCDEF01, "snap journal");
     CHECK_INT(back.next_usn, 42000, "snap next_usn");
     CHECK_U64(back.min_size, 1ULL << 20, "snap min_size");
     CHECK_INT(back.bytes_per_cluster, 4096, "snap bpc");
-    CHECK_U64(back.n_dirs, 1, "snap n_dirs");
-    if (back.n_dirs == 1) {
+    CHECK_U64(back.dirs.size(), 1, "snap n_dirs");
+    if (back.dirs.size() == 1) {
         CHECK_U64(back.dirs[0].index, 10, "snap dir index");
         CHECK_INT(back.dirs[0].seq, 3, "snap dir seq");
         CHECK_U64(back.dirs[0].parent_frn, 5, "snap dir parent");
-        CHECK_STREQ(back.dirs[0].name, "Users", "snap dir name");
+        CHECK_STREQ(back.dirs[0].name.c_str(), "Users", "snap dir name");
     }
-    CHECK_U64(back.n_files, 1, "snap n_files");
-    if (back.n_files == 1) {
+    CHECK_U64(back.files.size(), 1, "snap n_files");
+    if (back.files.size() == 1) {
         CHECK_U64(back.files[0].frn, (1ULL << 48) | 20, "snap file frn");
         CHECK_U64(back.files[0].parent_frn, (3ULL << 48) | 10, "snap file parent");
-        CHECK_STREQ(back.files[0].name, "video.mp4", "snap file name");
+        CHECK_STREQ(back.files[0].name.c_str(), "video.mp4", "snap file name");
         CHECK_U64(back.files[0].size, 4194304, "snap file size");
         CHECK_U64(back.files[0].mtime, 1700000000, "snap file mtime");
         CHECK_U64(back.files[0].first_lcn, 999, "snap file first_lcn");
         CHECK_U64(back.files[0].sort_key, 999, "snap file sort_key");
         CHECK_INT(back.files[0].can_raw_read, 1, "snap file can_raw_read");
     }
-    cdc_snapshot_free(&back);
-    cdc_snapshot_free(&s);
     unlink(path);
     rmdir(dir_tmpl);
 
     /* 不存在的快照文件 => load 失败。 */
-    CdcSnapshot missing;
-    CHECK_INT(cdc_snapshot_load("/tmp/cdc-test-snap-definitely-missing.bin", &missing) == 0, 0, "missing snapshot fails");
+    cdc::Snapshot missing;
+    CHECK_INT(cdc::snapshot_load("/tmp/cdc-test-snap-definitely-missing.bin", missing) == 0, 0, "missing snapshot fails");
 
     /* usn_state_usable：游标在 [first, next] 内且 journal 一致才可用。 */
-    CHECK_INT(cdc_usn_state_usable(0xABCDEF01, 100, 0xABCDEF01, 50, 200), 1, "usn usable in-range");
-    CHECK_INT(cdc_usn_state_usable(0xABCDEF01, 50, 0xABCDEF01, 50, 200), 1, "usn usable at first");
-    CHECK_INT(cdc_usn_state_usable(0xABCDEF01, 200, 0xABCDEF01, 50, 200), 1, "usn usable at next");
-    CHECK_INT(cdc_usn_state_usable(0xABCDEF02, 100, 0xABCDEF01, 50, 200), 0, "usn journal changed");
-    CHECK_INT(cdc_usn_state_usable(0xABCDEF01, 49, 0xABCDEF01, 50, 200), 0, "usn cursor before first");
-    CHECK_INT(cdc_usn_state_usable(0xABCDEF01, 201, 0xABCDEF01, 50, 200), 0, "usn cursor after next");
+    CHECK_INT(cdc::usn_state_usable(0xABCDEF01, 100, 0xABCDEF01, 50, 200), 1, "usn usable in-range");
+    CHECK_INT(cdc::usn_state_usable(0xABCDEF01, 50, 0xABCDEF01, 50, 200), 1, "usn usable at first");
+    CHECK_INT(cdc::usn_state_usable(0xABCDEF01, 200, 0xABCDEF01, 50, 200), 1, "usn usable at next");
+    CHECK_INT(cdc::usn_state_usable(0xABCDEF02, 100, 0xABCDEF01, 50, 200), 0, "usn journal changed");
+    CHECK_INT(cdc::usn_state_usable(0xABCDEF01, 49, 0xABCDEF01, 50, 200), 0, "usn cursor before first");
+    CHECK_INT(cdc::usn_state_usable(0xABCDEF01, 201, 0xABCDEF01, 50, 200), 0, "usn cursor after next");
     printf("snapshot done\n");
 }
 
@@ -594,7 +563,7 @@ static void test_hashcache(void) {
     if (!mkdtemp(dir_tmpl)) { perror("mkdtemp"); exit(2); }
     char dbpath[PATH_MAX];
     join_path(dbpath, sizeof dbpath, dir_tmpl, "hash-cache-v3.db");
-    uint64_t now = cdc_now_seconds();
+    uint64_t now = cdc::now_seconds();
 
     cdc_digest_t d1 = blake3_of("hello", 5);
     cdc_digest_t d2 = blake3_of("world", 5);
@@ -775,8 +744,8 @@ static void test_fastio(void) {
     memset(headA, 'A', sizeof headA);
     memset(headC, 'C', sizeof headC);
     cdc_digest_t expA, expC;
-    cdc_xxh3_buf_to_digest32((const uint8_t *)headA, 4096, expA.bytes);
-    cdc_xxh3_buf_to_digest32((const uint8_t *)headC, 100, expC.bytes);
+    cdc::xxh3_buf_to_digest32((const uint8_t *)headA, 4096, expA.bytes);
+    cdc::xxh3_buf_to_digest32((const uint8_t *)headC, 100, expC.bytes);
     CdcIocpRequest reqs[3];
     reqs[0].idx = 0; reqs[0].path = pa; reqs[0].frn = 0; reqs[0].want = 4096;
     reqs[1].idx = 1; reqs[1].path = pc; reqs[1].frn = 0; reqs[1].want = 4096;
@@ -1001,7 +970,7 @@ static void test_hash_groups(void) {
     cdc_hashcache_t *cache = cdc_hashcache_open(NULL); /* 纯内存 */
     cdc_digest_update_t *updates = NULL;
     size_t n_updates = 0;
-    CHECK_INT(cdc_scan_hash_groups(inputs, 3, cache, cdc_now_seconds(), &updates, &n_updates), 0,
+    CHECK_INT(cdc_scan_hash_groups(inputs, 3, cache, cdc::now_seconds(), &updates, &n_updates), 0,
               "hash_groups rc");
     /* g1/g2 一对（同 size 且内容相同）=> 各一条带 full 的 update；g3 单件 => 无。 */
     CHECK_U64(n_updates, 2, "hash_groups updates");
@@ -1039,33 +1008,32 @@ static void test_hash_groups(void) {
 static void test_sampling(void) {
     printf("== sampling ==\n");
     /* XXH3-64 已知向量：空输入（seed 0）= 0x2d06800538d394c2。 */
-    CHECK_U64(cdc_xxh3_64(NULL, 0), 0x2d06800538d394c2ULL, "xxh3 empty vector");
-    CHECK_U64(cdc_xxh3_64((const uint8_t *)"", 0), 0x2d06800538d394c2ULL, "xxh3 empty str");
+    CHECK_U64(cdc::xxh3_64(NULL, 0), 0x2d06800538d394c2ULL, "xxh3 empty vector");
+    CHECK_U64(cdc::xxh3_64((const uint8_t *)"", 0), 0x2d06800538d394c2ULL, "xxh3 empty str");
     /* 确定性 + 流式与一次性一致。 */
     static const uint8_t data[] = "the quick brown fox jumps over the lazy dog";
-    uint64_t a = cdc_xxh3_64(data, sizeof data - 1);
-    uint64_t b = cdc_xxh3_64(data, sizeof data - 1);
+    uint64_t a = cdc::xxh3_64(data, sizeof data - 1);
+    uint64_t b = cdc::xxh3_64(data, sizeof data - 1);
     CHECK_U64(a, b, "xxh3 deterministic");
     CHECK(a != 0, "xxh3 nonzero");
-    cdc_xxh3_state_t *st = cdc_xxh3_state_new();
+    auto st = cdc::Xxh3State::create();
     CHECK(st != NULL, "xxh3 state new");
     if (st) {
-        CHECK_INT(cdc_xxh3_state_update(st, data, 10), 0, "xxh3 update 1");
-        CHECK_INT(cdc_xxh3_state_update(st, data + 10, sizeof data - 1 - 10), 0,
+        CHECK_INT(st->update(data, 10), 0, "xxh3 update 1");
+        CHECK_INT(st->update(data + 10, sizeof data - 1 - 10), 0,
                   "xxh3 update 2");
-        CHECK_U64(cdc_xxh3_state_finalize(st), a, "xxh3 streaming == oneshot");
-        cdc_xxh3_state_free(st);
+        CHECK_U64(st->finalize(), a, "xxh3 streaming == oneshot");
     }
     /* 载体编码往返 + hex。 */
     uint8_t carrier[32];
-    cdc_xxh_to_digest32(a, carrier);
-    CHECK_U64(cdc_xxh_from_digest32(carrier), a, "xxh carrier roundtrip");
+    cdc::xxh_to_digest32(a, carrier);
+    CHECK_U64(cdc::xxh_from_digest32(carrier), a, "xxh carrier roundtrip");
     CHECK(carrier[8] == 0 && carrier[31] == 0, "xxh carrier zero tail");
     uint8_t buf2[32];
-    cdc_xxh3_buf_to_digest32(data, sizeof data - 1, buf2);
+    cdc::xxh3_buf_to_digest32(data, sizeof data - 1, buf2);
     CHECK(memcmp(buf2, carrier, 32) == 0, "xxh buf_to_digest32");
     char hex[17];
-    cdc_xxh_to_hex(a, hex);
+    cdc::xxh_to_hex(a, hex);
     CHECK(strlen(hex) == 16, "xxh hex len");
     uint64_t back = 0;
     for (int i = 0; i < 16; i++) {
@@ -1086,7 +1054,7 @@ static void test_hashcache_xxh_compat(void) {
     if (!mkdtemp(dir_tmpl)) { perror("mkdtemp"); exit(2); }
     char dbpath[PATH_MAX];
     join_path(dbpath, sizeof dbpath, dir_tmpl, "hash-cache-v3.db");
-    uint64_t now = cdc_now_seconds();
+    uint64_t now = cdc::now_seconds();
     const char *p = "/tmp/compat.bin";
 
     /* 1. 预置一条"旧版"记录：只有 BLAKE3 full（模拟 Rust 版或旧版 C
@@ -1131,7 +1099,7 @@ static void test_hashcache_xxh_compat(void) {
 
     /* 3. 再记一条 xxh head（模拟新版扫描），落盘后 full 仍是原来
      *    的 BLAKE3 值、不被 xxHash 覆盖；head_xxh 落进新列。 */
-    uint64_t xhead = cdc_xxh3_64((const uint8_t *)"head-data", 9);
+    uint64_t xhead = cdc::xxh3_64((const uint8_t *)"head-data", 9);
     cdc_hashcache_t *hc3 = cdc_hashcache_open_at(dbpath, 0);
     cdc_digest_set_t sx;
     memset(&sx, 0, sizeof sx);
@@ -1439,19 +1407,18 @@ static void ref_fallback_walk(const char *dir, const char *rel, uint64_t min_siz
 static void check_walk_matches(const char *root, uint64_t min_size,
                                const char *const *skip_top, size_t n_skip,
                                size_t want_n, const char *what) {
-    CdcFileEntryList got;
+    cdc::FileEntryList got;
     StrList ref, got_s;
-    memset(&got, 0, sizeof got);
     memset(&ref, 0, sizeof ref);
     memset(&got_s, 0, sizeof got_s);
-    CHECK_INT(cdc_fallback_walk_files(root, min_size, skip_top, n_skip, &got), 0, what);
+    CHECK_INT(cdc::fallback_walk_files(root, min_size, cdc::SkipList(skip_top, n_skip), got), 0, what);
     ref_fallback_walk(root, "", min_size, skip_top, n_skip, 1, &ref);
-    for (size_t i = 0; i < got.n; i++) {
+    for (size_t i = 0; i < got.size(); i++) {
         char line[PATH_MAX + 64];
-        const char *rel = got.items[i].path + strlen(root) + 1;
+        const char *rel = got[i].path.c_str() + strlen(root) + 1;
         snprintf(line, sizeof line, "%s|%llu|%llu", rel,
-                 (unsigned long long)got.items[i].size,
-                 (unsigned long long)got.items[i].mtime);
+                 (unsigned long long)got[i].size,
+                 (unsigned long long)got[i].mtime);
         strlist_push(&got_s, line);
     }
     strlist_sort(&ref);
@@ -1462,7 +1429,6 @@ static void check_walk_matches(const char *root, uint64_t min_size,
         CHECK_STREQ(got_s.items[i], ref.items[i], what);
     strlist_free(&ref);
     strlist_free(&got_s);
-    cdc_file_entry_list_free(&got);
 }
 
 static void test_fallback_walk(void) {
@@ -1516,12 +1482,10 @@ static void test_fallback_walk(void) {
     check_walk_matches(root, 0, NULL, 0, 7, "walk no skip_top");
     /* 缺失目录：打不开静默跳过，返回 0、空集。 */
     {
-        CdcFileEntryList out;
-        memset(&out, 0, sizeof out);
+        cdc::FileEntryList out;
         join_path(q, sizeof q, root, "no-such-dir");
-        CHECK_INT(cdc_fallback_walk_files(q, 0, skip_top, 1, &out), 0, "walk missing dir");
-        CHECK_U64(out.n, 0, "walk missing dir empty");
-        cdc_file_entry_list_free(&out);
+        CHECK_INT(cdc::fallback_walk_files(q, 0, cdc::SkipList(skip_top, 1), out), 0, "walk missing dir");
+        CHECK_U64(out.size(), 0, "walk missing dir empty");
     }
     printf("fallback walk done\n");
 }

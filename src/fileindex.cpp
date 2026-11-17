@@ -19,7 +19,7 @@
 #include "sqlite3.h"
 
 #include "fileindex.h"
-#include "mft.h" /* cdc_cache_dir、cdc_usn_state_usable */
+#include "mft.h" /* cdc_cache_dir、cdc::usn_state_usable */
 
 #ifdef _WIN32
 #include <windows.h>
@@ -882,12 +882,12 @@ static int fi_tmp_db(char *buf, size_t cap) {
 }
 
 static void test_usn_usable(void) {
-    FI_CHECK(cdc_usn_state_usable(7, 500, 7, 100, 500), "usable exact");
-    FI_CHECK(cdc_usn_state_usable(7, 500, 7, 100, 900), "usable behind");
-    FI_CHECK(cdc_usn_state_usable(7, 100, 7, 100, 900), "usable at first_usn");
-    FI_CHECK(!cdc_usn_state_usable(7, 500, 8, 100, 900), "gap journal changed");
-    FI_CHECK(!cdc_usn_state_usable(7, 50, 7, 100, 900), "gap cursor before first");
-    FI_CHECK(!cdc_usn_state_usable(7, 950, 7, 100, 900), "gap cursor ahead");
+    FI_CHECK(cdc::usn_state_usable(7, 500, 7, 100, 500), "usable exact");
+    FI_CHECK(cdc::usn_state_usable(7, 500, 7, 100, 900), "usable behind");
+    FI_CHECK(cdc::usn_state_usable(7, 100, 7, 100, 900), "usable at first_usn");
+    FI_CHECK(!cdc::usn_state_usable(7, 500, 8, 100, 900), "gap journal changed");
+    FI_CHECK(!cdc::usn_state_usable(7, 50, 7, 100, 900), "gap cursor before first");
+    FI_CHECK(!cdc::usn_state_usable(7, 950, 7, 100, 900), "gap cursor ahead");
 }
 
 static void test_roundtrip(void) {

@@ -12,8 +12,8 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "mft.h" /* CDC_MFT_SKIP_FILE_ATTRS */
-#include "sampling.h" /* 头摘要是 XXH3-64（cdc_xxh3_buf_to_digest32） */
+#include "mft.h" /* cdc::kMftSkipFileAttrs */
+#include "sampling.h" /* 头摘要是 XXH3-64（cdc::xxh3_buf_to_digest32） */
 #include "util.h"     /* cdc_utf8_to_wide */
 
 /* on_tick 串行化：回调可能非线程安全（如测试的计数器），并行路径下
@@ -96,7 +96,7 @@ CdcFile *cdc_file_open_checked(const char *path, uint64_t frn, uint32_t flags, v
     if (has_file_id) *has_file_id = 0;
     BY_HANDLE_FILE_INFORMATION info;
     if (GetFileInformationByHandle(h, &info)) {
-        if (info.dwFileAttributes & CDC_MFT_SKIP_FILE_ATTRS) {
+        if (info.dwFileAttributes & cdc::kMftSkipFileAttrs) {
             CloseHandle(h);
             return NULL;
         }
@@ -366,7 +366,7 @@ size_t cdc_coalesced_raw_volume_heads(char drive_letter, const CdcRawHeadTarget 
                     size_t rel = (size_t)(sorted[k].offset - start_off);
                     size_t end = rel + sorted[k].want;
                     if (end <= span_len) {
-                        cdc_xxh3_buf_to_digest32(buf + rel, sorted[k].want, out[n_out].digest);
+                        cdc::xxh3_buf_to_digest32(buf + rel, sorted[k].want, out[n_out].digest);
                         out[n_out].idx = sorted[k].idx;
                         n_out++;
                         call_tick(on_tick, tick_ctx);
@@ -447,7 +447,7 @@ static int iocp_submit_next(IocpCtx *ctx, size_t slot_idx) {
         if (req->frn == 0) {
             BY_HANDLE_FILE_INFORMATION info;
             if (GetFileInformationByHandle(h, &info)) {
-                if (info.dwFileAttributes & CDC_MFT_SKIP_FILE_ATTRS) {
+                if (info.dwFileAttributes & cdc::kMftSkipFileAttrs) {
                     CloseHandle(h);
                     call_tick(ctx->on_tick, ctx->tick_ctx);
                     continue;
@@ -464,7 +464,7 @@ static int iocp_submit_next(IocpCtx *ctx, size_t slot_idx) {
         }
         size_t want = req->want < 4096 ? req->want : 4096;
         if (want == 0) {
-            cdc_xxh3_buf_to_digest32(NULL, 0, ctx->out[ctx->n_out].digest);
+            cdc::xxh3_buf_to_digest32(NULL, 0, ctx->out[ctx->n_out].digest);
             ctx->out[ctx->n_out].idx = req->idx;
             ctx->out[ctx->n_out].has_file_id = 0;
             ctx->n_out++;
@@ -543,7 +543,7 @@ size_t cdc_iocp_read_heads(const CdcIocpRequest *reqs, size_t n, size_t concurre
         IocpSlot *slot = &slots[slot_idx];
         if (ok && bytes > 0) {
             size_t m = (size_t)bytes < slot->want ? (size_t)bytes : slot->want;
-            cdc_xxh3_buf_to_digest32(slot->buf, m, ctx.out[ctx.n_out].digest);
+            cdc::xxh3_buf_to_digest32(slot->buf, m, ctx.out[ctx.n_out].digest);
             ctx.out[ctx.n_out].idx = slot->item_idx;
             ctx.out[ctx.n_out].has_file_id = 0;
             BY_HANDLE_FILE_INFORMATION info;
@@ -615,14 +615,14 @@ static void iocp_linux_work(void *ctx, size_t i) {
     size_t want = req->want < 4096 ? req->want : 4096;
     uint8_t buf[4096];
     if (want == 0) {
-        cdc_xxh3_buf_to_digest32(NULL, 0, c->out[i].digest);
+        cdc::xxh3_buf_to_digest32(NULL, 0, c->out[i].digest);
         c->out[i].idx = req->idx;
         c->out[i].has_file_id = 0;
         c->valid[i] = 1;
     } else {
         size_t got = 0;
         if (cdc_file_read_seq(f, buf, want, &got) == 0 && got > 0) {
-            cdc_xxh3_buf_to_digest32(buf, got, c->out[i].digest);
+            cdc::xxh3_buf_to_digest32(buf, got, c->out[i].digest);
             c->out[i].idx = req->idx;
             c->out[i].has_file_id = has_id;
             c->out[i].file_id = fid;
@@ -655,14 +655,14 @@ static size_t iocp_linux_sequential(const CdcIocpRequest *reqs, size_t n,
         size_t want = req->want < 4096 ? req->want : 4096;
         uint8_t buf[4096];
         if (want == 0) {
-            cdc_xxh3_buf_to_digest32(NULL, 0, out[n_out].digest);
+            cdc::xxh3_buf_to_digest32(NULL, 0, out[n_out].digest);
             out[n_out].idx = req->idx;
             out[n_out].has_file_id = 0;
             n_out++;
         } else {
             size_t got = 0;
             if (cdc_file_read_seq(f, buf, want, &got) == 0 && got > 0) {
-                cdc_xxh3_buf_to_digest32(buf, got, out[n_out].digest);
+                cdc::xxh3_buf_to_digest32(buf, got, out[n_out].digest);
                 out[n_out].idx = req->idx;
                 out[n_out].has_file_id = has_id;
                 out[n_out].file_id = fid;

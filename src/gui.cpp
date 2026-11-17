@@ -1444,7 +1444,7 @@ static int gui_scan_rule(cdc_rule_t *rule, cJSON **out_category) {
     ctx.inc = inc;
     ctx.exc = exc;
     ctx.min_age_minutes = rule->min_age_minutes;
-    ctx.now = cdc_now_seconds();
+    ctx.now = cdc::now_seconds();
     cdc_err_t err;
     for (size_t i = 0; i < nroots; i++) {
         if (gui_path_is_reparse(roots[i])) continue;
@@ -1757,7 +1757,7 @@ static int h_clean_categories(const char *args_json, char **out_json,
         ctx.inc = &inc;
         ctx.exc = &exc;
         ctx.min_age_minutes = rule->min_age_minutes;
-        ctx.now = cdc_now_seconds();
+        ctx.now = cdc::now_seconds();
         ctx.task_id = "clean";
         for (size_t ri = 0; ri < nroots && !cancelled; ri++) {
             if (cdc_task_cancelled("clean")) {
@@ -2156,7 +2156,7 @@ static cJSON *gui_query_dups_from_index(char **roots, size_t nroots,
         size_t nkept = 0;
         if (keep) {
             for (size_t i = 0; i < nrows; i++) {
-                if (cdc_is_system_file_name(rows[i].path)) continue;
+                if (cdc::is_system_file_name(rows[i].path)) continue;
                 int in_scope = 0;
                 for (size_t s = 0; s < nscopes; s++) {
                     if (serials[s] != rows[i].volume_serial) continue;
@@ -2309,8 +2309,8 @@ static cJSON *gui_query_big_from_index(char **drives, size_t ndrives) {
         arr = cJSON_CreateArray();
         if (arr) {
             for (size_t i = 0; i < nrows; i++) {
-                if (cdc_is_system_file_name(rows[i].path)) continue;
-                if (rows[i].size < cdc_big_file_threshold_bytes(rows[i].path))
+                if (cdc::is_system_file_name(rows[i].path)) continue;
+                if (rows[i].size < cdc::big_file_threshold_bytes(rows[i].path))
                     continue;
                 cJSON *o = cJSON_CreateObject();
                 if (!o) continue;
@@ -2378,7 +2378,7 @@ static int h_scan_dups(const char *args_json, char **out_json,
         uint64_t fsize = 0;
         gui_file_stat(cache_path, &fsize, &mtime);
         if (mtime != 0) {
-            uint64_t now = cdc_now_seconds();
+            uint64_t now = cdc::now_seconds();
             if (now >= mtime && now - mtime < 300) {
                 FILE *f = fopen(cache_path, "rb");
                 if (f) {
@@ -3730,7 +3730,7 @@ static int h_shred(const char *args_json, char **out_json,
                         summary);
     }
     {
-        char *stamp = cdc_human_stamp(cdc_now_seconds());
+        char *stamp = cdc_human_stamp(cdc::now_seconds());
         char line[512];
         snprintf(line, sizeof(line), "%s\tok\t成功 %llu 个，失败 %llu 个",
                  stamp ? stamp : "", (unsigned long long)report.files_ok,

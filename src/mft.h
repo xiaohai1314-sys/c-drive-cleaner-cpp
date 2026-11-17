@@ -1,181 +1,161 @@
-/* mft.h — $MFT 解析 + 快照 + USN Journal 增量，对照 desktop/src/mft.rs。
- *
- * Windows 专属的卷操作（CreateFileW / FSCTL_*）只在 _WIN32 下编译；
- * Linux 下 cdc_mft_try_scan 返回"不适用"，调用方退回目录遍历。
- * 纯逻辑函数（parse_record、快照编解码、USN gap 判定）全平台可测。
- *
- * 注意：cdc_now_seconds 由本模块提供；cdc_cache_dir 的实现在 util.c，
- * 这里的声明只是复用同一原型（fileindex.c、hashcache.c、scan.c 经 mft.h
- * 拿到它；不要在本模块另写实现——此前这里的版本把"盘"写了两遍）。
- */
-#ifndef CDC_MFT_H
-#define CDC_MFT_H
+// mft.h — $MFT 解析 + 快照 + USN Journal 增量，对照 desktop/src/mft.rs。
+//
+// Windows 专属的卷操作（CreateFileW / FSCTL_*）只在 _WIN32 下编译；
+// Linux 下 mft_try_scan 返回"不适用"，调用方退回目录遍历。
+// 纯逻辑函数（parse_record、快照编解码、USN gap 判定）全平台可测。
+#pragma once
 
-#include <stddef.h>
-#include <stdint.h>
+#include <cstddef>
+#include <cstdint>
+#include <span>
+#include <string>
+#include <string_view>
+#include <vector>
 
-#include "mft_util.h" /* MftRun */
+#include "mft_util.h"  // MftRun
+#include "util.h"      // FunctionRef
 
-#define CDC_MFT_SNAPSHOT_FLOOR_MIN_SIZE (1ULL << 20)
-#define CDC_MFT_MAX_USN_DELTA_FRNS 25000
-#define CDC_MFT_RAW_READ_MIN_AGE_SECS 300
+namespace cdc {
 
-#define CDC_FILE_ATTR_REPARSE_POINT 0x00000400u
-#define CDC_FILE_ATTR_COMPRESSED 0x00000800u
-#define CDC_FILE_ATTR_SPARSE_FILE 0x00000200u
-#define CDC_FILE_ATTR_OFFLINE 0x00001000u
-#define CDC_FILE_ATTR_ENCRYPTED 0x00004000u
-#define CDC_FILE_ATTR_RECALL_ON_OPEN 0x00040000u
-#define CDC_FILE_ATTR_RECALL_ON_DATA_ACCESS 0x00400000u
-#define CDC_MFT_SKIP_FILE_ATTRS \
-    (CDC_FILE_ATTR_REPARSE_POINT | CDC_FILE_ATTR_OFFLINE | \
-     CDC_FILE_ATTR_RECALL_ON_OPEN | CDC_FILE_ATTR_RECALL_ON_DATA_ACCESS)
-#define CDC_MFT_NO_RAW_ATTRS \
-    (CDC_MFT_SKIP_FILE_ATTRS | CDC_FILE_ATTR_COMPRESSED | \
-     CDC_FILE_ATTR_ENCRYPTED | CDC_FILE_ATTR_SPARSE_FILE)
+inline constexpr uint64_t kMftSnapshotFloorMinSize = 1ULL << 20;
+inline constexpr size_t kMftMaxUsnDeltaFrns = 25000;
+inline constexpr uint64_t kMftRawReadMinAgeSecs = 300;
 
-/* 顶层跳过目录（mft.rs TOP_SKIP，比较时转小写后比对）。 */
-extern const char *const CDC_TOP_SKIP[];
-extern const size_t CDC_TOP_SKIP_N;
+inline constexpr uint32_t kFileAttrReparsePoint = 0x00000400u;
+inline constexpr uint32_t kFileAttrCompressed = 0x00000800u;
+inline constexpr uint32_t kFileAttrSparseFile = 0x00000200u;
+inline constexpr uint32_t kFileAttrOffline = 0x00001000u;
+inline constexpr uint32_t kFileAttrEncrypted = 0x00004000u;
+inline constexpr uint32_t kFileAttrRecallOnOpen = 0x00040000u;
+inline constexpr uint32_t kFileAttrRecallOnDataAccess = 0x00400000u;
+inline constexpr uint32_t kMftSkipFileAttrs = kFileAttrReparsePoint | kFileAttrOffline |
+                                              kFileAttrRecallOnOpen | kFileAttrRecallOnDataAccess;
+inline constexpr uint32_t kMftNoRawAttrs =
+    kMftSkipFileAttrs | kFileAttrCompressed | kFileAttrEncrypted | kFileAttrSparseFile;
 
-typedef struct {
-    char *path; /* malloc'd UTF-8，调用方用 cdc_file_entry_list_free 释放 */
-    uint64_t size;
-    uint64_t mtime; /* unix 秒 */
-    uint64_t sort_key;
-    uint64_t frn; /* 完整 FRN：seq<<48 | index */
-    uint64_t first_lcn;
-    uint32_t bytes_per_cluster;
-    int can_raw_read;
-} CdcFileEntry;
+// 顶层跳过目录列表（比较时 ASCII 转小写后比对）。
+using SkipList = std::span<const char *const>;
 
-typedef struct {
-    CdcFileEntry *items;
-    size_t n, cap;
-} CdcFileEntryList;
+// mft.rs TOP_SKIP（与 Rust main.rs 的 TOP_SKIP 逐字一致）。
+inline constexpr const char *kTopSkipNames[] = {
+    "$recycle.bin", "system volume information", "windows", "program files",
+    "program files (x86)", "programdata", "recovery", "perflogs", "msocache",
+    "config.msi", "$windows.~bt", "$windows.~ws", "windows.old",
+};
+inline constexpr SkipList kTopSkip{kTopSkipNames};
 
-void cdc_file_entry_list_free(CdcFileEntryList *list);
+struct FileEntry {
+    std::string path;  // UTF-8
+    uint64_t size = 0;
+    uint64_t mtime = 0;  // unix 秒
+    uint64_t sort_key = 0;
+    uint64_t frn = 0;  // 完整 FRN：seq<<48 | index
+    uint64_t first_lcn = 0;
+    uint32_t bytes_per_cluster = 0;
+    bool can_raw_read = false;
+};
+using FileEntryList = std::vector<FileEntry>;
 
-/* keep 回调：name 为文件名（不含路径），返回 0 丢弃、非 0 保留。ctx 可为 NULL。 */
-typedef int (*cdc_keep_fn)(const char *name, uint64_t size, void *ctx);
+// keep 回调：name 为文件名（不含路径），返回 false 丢弃。可为空（全保留）。
+using KeepFn = FunctionRef<bool(std::string_view name, uint64_t size)>;
 
-/* 扫描入口：先试 $MFT（Windows），不行退回目录遍历。返回 0 成功。 */
-int cdc_scan_files(const char *root, uint64_t min_size,
-                   const char *const *skip_top, size_t n_skip,
-                   cdc_keep_fn keep, void *keep_ctx, CdcFileEntryList *out);
+// 扫描入口：先试 $MFT（Windows），不行退回目录遍历。结果追加到 out。返回 0 成功。
+int scan_files(const char *root, uint64_t min_size, SkipList skip_top, KeepFn keep,
+               FileEntryList &out);
+// 仅 $MFT 路径；0=成功追加 entries，1=不适用（调用方应退回遍历），<0=出错。
+int mft_try_scan(const char *root, uint64_t min_size, SkipList skip_top, KeepFn keep,
+                 FileEntryList &out);
+// 目录遍历退路（全平台）：skip_top 只在根目录那一层生效。
+int fallback_walk_files(const char *root, uint64_t min_size, SkipList skip_top,
+                        FileEntryList &out);
 
-/* 仅 $MFT 路径；0=成功填入 entries，1=不适用（调用方应退回遍历），<0=出错。 */
-int cdc_mft_try_scan(const char *root, uint64_t min_size,
-                     const char *const *skip_top, size_t n_skip,
-                     cdc_keep_fn keep, void *keep_ctx, CdcFileEntryList *out);
+// ---- parse_record_in_place ----
 
-/* 目录遍历退路（全平台）：skip_top 只在根目录那一层生效。 */
-int cdc_fallback_walk_files(const char *root, uint64_t min_size,
-                            const char *const *skip_top, size_t n_skip,
-                            CdcFileEntryList *out);
+enum class RecordKind { Skip, Dir, File, MftRoot };
 
-/* ---- parse_record_in_place ---- */
+struct ParsedRecord {
+    RecordKind kind = RecordKind::Skip;
+    uint64_t index = 0;       // 记录号（48 位）
+    uint64_t frn = 0;         // 完整 FRN（文件）
+    uint64_t parent_frn = 0;  // 文件/目录
+    std::string name;         // 文件/目录；Skip/Root 为空
+    uint64_t size = 0;        // 文件
+    uint64_t mtime = 0;       // 文件
+    uint64_t first_lcn = 0;   // 文件
+    uint64_t sort_key = 0;    // 文件
+    bool can_raw_read = false;
+    uint16_t seq = 0;          // 目录
+    bool reparse = false;      // 目录
+    std::vector<MftRun> runs;  // MftRoot：$MFT 自身的 runlist
+};
 
-typedef enum {
-    CDC_REC_SKIP,
-    CDC_REC_DIR,
-    CDC_REC_FILE,
-    CDC_REC_MFT_ROOT
-} CdcRecordKind;
+// rec 会被原地改写（USA fixup）。out 先被重置（保留容量）。返回 0 成功。
+int parse_record_in_place(uint8_t *rec, size_t rec_len, uint64_t index, size_t bytes_per_sector,
+                          size_t bytes_per_cluster, uint64_t min_size, ParsedRecord &out);
 
-typedef struct {
-    CdcRecordKind kind;
-    uint64_t index;      /* 记录号（48 位） */
-    uint64_t frn;        /* 完整 FRN（文件） */
-    uint64_t parent_frn; /* 文件/目录 */
-    char *name;          /* malloc'd，文件/目录；Skip/Root 为 NULL */
-    uint64_t size;       /* 文件 */
-    uint64_t mtime;      /* 文件 */
-    uint64_t first_lcn;  /* 文件 */
-    uint64_t sort_key;   /* 文件 */
-    int can_raw_read;    /* 文件 */
-    uint16_t seq;        /* 目录 */
-    int reparse;         /* 目录 */
-    MftRun *runs;        /* MFT_ROOT：$MFT 自身的 runlist */
-    size_t n_runs;
-} CdcParsedRecord;
+// ---- 快照（与 Rust 版二进制格式字节一致，见 mft.rs save_snapshot） ----
 
-/* rec 会被原地改写（USA fixup）。返回 0 成功。 */
-int cdc_parse_record_in_place(uint8_t *rec, size_t rec_len, uint64_t index,
-                              size_t bytes_per_sector, size_t bytes_per_cluster,
-                              uint64_t min_size, CdcParsedRecord *out);
-void cdc_parsed_record_free(CdcParsedRecord *r);
+struct DirNode {
+    uint64_t index = 0;
+    uint16_t seq = 0;
+    uint64_t parent_frn = 0;
+    std::string name;
+    bool reparse = false;
+};
 
-/* ---- 快照（与 Rust 版二进制格式字节一致，见 mft.rs save_snapshot） ---- */
+struct RawFile {
+    uint64_t frn = 0, parent_frn = 0;
+    std::string name;
+    uint64_t size = 0, mtime = 0, first_lcn = 0, sort_key = 0;
+    bool can_raw_read = false;
+};
 
-typedef struct {
-    uint64_t index;
-    uint16_t seq;
-    uint64_t parent_frn;
-    char *name; /* malloc'd */
-    int reparse;
-} CdcDirNode;
+struct Snapshot {
+    uint64_t volume_serial = 0, journal_id = 0;
+    int64_t next_usn = 0;
+    uint64_t min_size = 0;
+    uint32_t bytes_per_cluster = 0;
+    std::vector<DirNode> dirs;
+    std::vector<RawFile> files;
+};
 
-typedef struct {
-    uint64_t frn, parent_frn;
-    char *name; /* malloc'd */
-    uint64_t size, mtime, first_lcn, sort_key;
-    int can_raw_read;
-} CdcRawFile;
+int snapshot_save(const std::string &path, const Snapshot &snap);  // 经 .tmp 原子改名；0 成功
+int snapshot_load(const std::string &path, Snapshot &out);         // 0 成功；失败时 out 为空快照
 
-typedef struct {
-    uint64_t volume_serial, journal_id;
-    int64_t next_usn;
-    uint64_t min_size;
-    uint32_t bytes_per_cluster;
-    CdcDirNode *dirs;
-    size_t n_dirs;
-    CdcRawFile *files;
-    size_t n_files;
-} CdcSnapshot;
+// ---- USN ----
 
-int cdc_snapshot_save(const char *path, const CdcSnapshot *snap); /* 经 .tmp 原子改名 */
-int cdc_snapshot_load(const char *path, CdcSnapshot *out);        /* 0 成功 */
-void cdc_snapshot_free(CdcSnapshot *snap);
+int volume_usn_state(const char *root, uint64_t &volume_serial, uint64_t &journal_id,
+                     int64_t &first_usn, int64_t &next_usn);  // 0 成功
 
-/* ---- USN ---- */
+// 纯函数：存量游标是否还能增量追赶（与 usn_changes_since 里的判定一致）。
+bool usn_state_usable(uint64_t stored_journal_id, int64_t stored_next_usn, uint64_t journal_id,
+                      int64_t first_usn, int64_t next_usn);
 
-int cdc_volume_usn_state(const char *root, uint64_t *volume_serial, uint64_t *journal_id,
-                         int64_t *first_usn, int64_t *next_usn); /* 0 成功 */
+struct UsnChangedFile {
+    uint64_t frn = 0;
+    std::string path;
+    uint64_t size = 0, mtime = 0;
+};
 
-/* 纯函数：存量游标是否还能增量追赶（与 usn_changes_since 里的判定一致）。 */
-int cdc_usn_state_usable(uint64_t stored_journal_id, int64_t stored_next_usn,
-                         uint64_t journal_id, int64_t first_usn, int64_t next_usn);
+struct UsnChangeSet {
+    uint64_t journal_id = 0;
+    int64_t next_usn = 0;
+    std::vector<uint64_t> deleted_frns;
+    std::vector<UsnChangedFile> files;
+    std::vector<std::string> renamed_old;  // 与 renamed_new 一一对应
+    std::vector<std::string> renamed_new;
+};
 
-/* 1=可用，0=应全量重建 */
+// 0=成功；1=调用方应全量重建；<0=出错。
+int usn_changes_since(const char *root, uint64_t stored_journal_id, int64_t stored_next_usn,
+                      SkipList skip_top, UsnChangeSet &out);
 
-typedef struct {
-    uint64_t frn;
-    char *path; /* malloc'd */
-    uint64_t size, mtime;
-} CdcUsnChangedFile;
+// ---- 共享小工具 ----
+uint64_t now_seconds();
 
-typedef struct {
-    uint64_t journal_id;
-    int64_t next_usn;
-    uint64_t *deleted_frns;
-    size_t n_deleted;
-    CdcUsnChangedFile *files;
-    size_t n_files;
-    char **renamed_old; /* malloc'd，与 renamed_new 一一对应 */
-    char **renamed_new;
-    size_t n_renamed;
-} CdcUsnChangeSet;
-
-/* 0=成功；1=调用方应全量重建；<0=出错。 */
-int cdc_usn_changes_since(const char *root, uint64_t stored_journal_id, int64_t stored_next_usn,
-                          const char *const *skip_top, size_t n_skip, CdcUsnChangeSet *out);
-void cdc_usn_change_set_free(CdcUsnChangeSet *s);
-
-/* ---- 共享小工具（cdc_now_seconds 由本模块提供；cdc_cache_dir 的实现在 util.c） ---- */
-
-/* malloc'd；%LOCALAPPDATA%\C盘清理工具\mftcache（Linux：$LOCALAPPDATA 或 "."）。
- * 目录不存在时创建。实现见 util.c。 */
-uint64_t cdc_now_seconds(void);
-
+// mft_raw.cpp（仅 Windows）：打开 \\.\X: 打印卷参数，--probe 命令用。
+#ifdef _WIN32
+int mft_probe_volume(const wchar_t *drive_letter);
 #endif
+
+}  // namespace cdc

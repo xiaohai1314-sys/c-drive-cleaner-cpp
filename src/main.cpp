@@ -55,7 +55,6 @@
 #endif
 
 #ifdef _WIN32
-int cdc_mft_probe_volume(const wchar_t *drive_letter);
 #endif
 
 /* ================= 自测（试点，保留） ================= */
@@ -70,46 +69,43 @@ static int checks = 0;
 
 static void test_filetime(void) {
     /* 1970-01-01T00:00:00Z 的 FILETIME = 11644473600 * 10^7 */
-    CHECK(mft_filetime_to_unix(116444736000000000ULL) == 0, "filetime epoch");
+    CHECK(cdc::mft_filetime_to_unix(116444736000000000ULL) == 0, "filetime epoch");
     /* 2020-01-01T00:00:00Z: unix 1577836800 */
-    CHECK(mft_filetime_to_unix(132223104000000000ULL) == 1577836800ULL, "filetime 2020");
-    CHECK(mft_filetime_to_unix(0) == 0, "filetime 0 saturates");
-    CHECK(mft_filetime_to_unix(50000000ULL) == 0, "filetime pre-epoch saturates");
+    CHECK(cdc::mft_filetime_to_unix(132223104000000000ULL) == 1577836800ULL, "filetime 2020");
+    CHECK(cdc::mft_filetime_to_unix(0) == 0, "filetime 0 saturates");
+    CHECK(cdc::mft_filetime_to_unix(50000000ULL) == 0, "filetime pre-epoch saturates");
 }
 
 static void test_runlist(void) {
     /* run1: header 0x11 len=2 off=+5 -> (vcn 0, lcn 5, len 2)
      * run2: header 0x21 len=3 off=+16 -> (vcn 2, lcn 21, len 3) */
     const uint8_t buf[] = {0x11, 0x02, 0x05, 0x21, 0x03, 0x10, 0x00, 0x00};
-    size_t n = 0;
-    MftRun *runs = mft_parse_runlist(buf, sizeof buf, &n);
-    CHECK(runs && n == 2, "runlist count");
-    if (runs && n == 2) {
+    std::vector<cdc::MftRun> runs = cdc::mft_parse_runlist(buf, sizeof buf);
+    size_t n = runs.size();
+    CHECK(n == 2, "runlist count");
+    if (n == 2) {
         CHECK(runs[0].vcn == 0 && runs[0].lcn == 5 && runs[0].len == 2, "runlist run1");
         CHECK(runs[1].vcn == 2 && runs[1].lcn == 21 && runs[1].len == 3, "runlist run2");
     }
-    free(runs);
     /* 稀疏 run：header 0x01（len_size=1, off_size=0）-> lcn -1 */
     const uint8_t sparse[] = {0x01, 0x04, 0x00};
-    runs = mft_parse_runlist(sparse, sizeof sparse, &n);
-    CHECK(runs && n == 1 && runs[0].lcn == -1 && runs[0].len == 4, "runlist sparse");
-    free(runs);
+    runs = cdc::mft_parse_runlist(sparse, sizeof sparse);
+    CHECK(runs.size() == 1 && runs[0].lcn == -1 && runs[0].len == 4, "runlist sparse");
     /* 非法 header（len_size=0）直接停，之前已解析的保留 */
     const uint8_t bad[] = {0x11, 0x02, 0x05, 0x00};
-    runs = mft_parse_runlist(bad, sizeof bad, &n);
-    CHECK(runs && n == 1, "runlist stops on bad header");
-    free(runs);
+    runs = cdc::mft_parse_runlist(bad, sizeof bad);
+    CHECK(runs.size() == 1, "runlist stops on bad header");
 }
 
 static void test_first_extent(void) {
     uint64_t lcn = 0, clusters = 0;
     const uint8_t ok[] = {0x21, 0x10, 0x34, 0x12}; /* len 16, lcn 0x1234 */
-    mft_parse_first_extent(ok, sizeof ok, &lcn, &clusters);
+    cdc::mft_parse_first_extent(ok, sizeof ok, lcn, clusters);
     CHECK(lcn == 0x1234 && clusters == 16, "first_extent ok");
     const uint8_t neg[] = {0x21, 0x01, 0xFF, 0xFF}; /* lcn -1 -> 无效 */
-    mft_parse_first_extent(neg, sizeof neg, &lcn, &clusters);
+    cdc::mft_parse_first_extent(neg, sizeof neg, lcn, clusters);
     CHECK(lcn == 0 && clusters == 0, "first_extent negative lcn");
-    mft_parse_first_extent(NULL, 0, &lcn, &clusters);
+    cdc::mft_parse_first_extent(NULL, 0, lcn, clusters);
     CHECK(lcn == 0 && clusters == 0, "first_extent empty");
 }
 
@@ -123,7 +119,7 @@ static void test_fixups(void) {
     rec[12] = 0xCC; rec[13] = 0xDD;
     rec[510] = 0x11; rec[511] = 0x22;
     rec[1022] = 0x33; rec[1023] = 0x44;
-    mft_apply_fixups(rec, sizeof rec, 512);
+    cdc::mft_apply_fixups(rec, sizeof rec, 512);
     CHECK(rec[510] == 0xAA && rec[511] == 0xBB, "fixup sector 1");
     CHECK(rec[1022] == 0xCC && rec[1023] == 0xDD, "fixup sector 2");
     CHECK(rec[8] == 0x55, "fixup leaves usa array alone");
@@ -132,29 +128,28 @@ static void test_fixups(void) {
 static void test_utf16(void) {
     /* "A" + U+4E2D(中) + 代理对 U+1F600(😀) */
     const uint8_t bytes[] = {0x41, 0x00, 0x2D, 0x4E, 0x3D, 0xD8, 0x00, 0xDE};
-    char *s = mft_utf16le_to_utf8(bytes, sizeof bytes);
-    CHECK(s && strcmp(s, "A\xe4\xb8\xad\xf0\x9f\x98\x80") == 0, "utf16 incl. surrogate pair");
-    free(s);
+    std::string s = cdc::mft_utf16le_to_utf8(bytes, sizeof bytes);
+    CHECK(s == "A\xe4\xb8\xad\xf0\x9f\x98\x80", "utf16 incl. surrogate pair");
 }
 
 static void test_thresholds(void) {
     /* 与 Rust main.rs big_file_thresholds_follow_kbigfile_tiers 逐条一致 */
-    const uint64_t MB = CDC_MB;
-    CHECK(cdc_big_file_threshold_bytes("C:\\a\\setup.exe") == 100 * MB, "thr exe");
-    CHECK(cdc_big_file_threshold_bytes("C:\\a\\setup.msi") == 100 * MB, "thr msi");
-    CHECK(cdc_big_file_threshold_bytes("C:\\a\\movie.mp4") == 20 * MB, "thr mp4");
-    CHECK(cdc_big_file_threshold_bytes("C:\\a\\movie.MP4") == 20 * MB, "thr MP4 case");
-    CHECK(cdc_big_file_threshold_bytes("C:\\a\\clip.tmp") == 20 * MB, "thr tmp");
-    CHECK(cdc_big_file_threshold_bytes("C:\\a\\song.mp3") == 5 * MB, "thr mp3");
-    CHECK(cdc_big_file_threshold_bytes("C:\\a\\pack.zip") == 5 * MB, "thr zip");
-    CHECK(cdc_big_file_threshold_bytes("C:\\a\\app.apk") == 5 * MB, "thr apk");
-    CHECK(cdc_big_file_threshold_bytes("C:\\a\\photo.jpg") == 2 * MB, "thr jpg");
-    CHECK(cdc_big_file_threshold_bytes("C:\\a\\doc.pdf") == 2 * MB, "thr pdf");
-    CHECK(cdc_big_file_threshold_bytes("C:\\a\\app.log") == 2 * MB, "thr log");
-    CHECK(cdc_big_file_threshold_bytes("C:\\a\\data.bin") == 50 * MB, "thr bin fallback");
-    CHECK(cdc_big_file_threshold_bytes("C:\\a\\README") == 50 * MB, "thr no-ext fallback");
-    CHECK(cdc_is_system_file_name("C:\\pagefile.sys"), "sys pagefile");
-    CHECK(!cdc_is_system_file_name("C:\\a\\movie.mp4"), "sys negative");
+    const uint64_t MB = cdc::kMB;
+    CHECK(cdc::big_file_threshold_bytes("C:\\a\\setup.exe") == 100 * MB, "thr exe");
+    CHECK(cdc::big_file_threshold_bytes("C:\\a\\setup.msi") == 100 * MB, "thr msi");
+    CHECK(cdc::big_file_threshold_bytes("C:\\a\\movie.mp4") == 20 * MB, "thr mp4");
+    CHECK(cdc::big_file_threshold_bytes("C:\\a\\movie.MP4") == 20 * MB, "thr MP4 case");
+    CHECK(cdc::big_file_threshold_bytes("C:\\a\\clip.tmp") == 20 * MB, "thr tmp");
+    CHECK(cdc::big_file_threshold_bytes("C:\\a\\song.mp3") == 5 * MB, "thr mp3");
+    CHECK(cdc::big_file_threshold_bytes("C:\\a\\pack.zip") == 5 * MB, "thr zip");
+    CHECK(cdc::big_file_threshold_bytes("C:\\a\\app.apk") == 5 * MB, "thr apk");
+    CHECK(cdc::big_file_threshold_bytes("C:\\a\\photo.jpg") == 2 * MB, "thr jpg");
+    CHECK(cdc::big_file_threshold_bytes("C:\\a\\doc.pdf") == 2 * MB, "thr pdf");
+    CHECK(cdc::big_file_threshold_bytes("C:\\a\\app.log") == 2 * MB, "thr log");
+    CHECK(cdc::big_file_threshold_bytes("C:\\a\\data.bin") == 50 * MB, "thr bin fallback");
+    CHECK(cdc::big_file_threshold_bytes("C:\\a\\README") == 50 * MB, "thr no-ext fallback");
+    CHECK(cdc::is_system_file_name("C:\\pagefile.sys"), "sys pagefile");
+    CHECK(!cdc::is_system_file_name("C:\\a\\movie.mp4"), "sys negative");
 }
 
 static int run_selftest(void) {
@@ -207,9 +202,9 @@ static void walk(const char *dir) {
         } else if (S_ISREG(st.st_mode)) {
             uint64_t size = (uint64_t)st.st_size;
             /* 与 Rust scan_big 相同：2MB 预过滤 + 分档阈值 + 跳过系统文件 */
-            if (size >= CDC_SCAN_MIN_BYTES &&
-                size >= cdc_big_file_threshold_bytes(full) &&
-                !cdc_is_system_file_name(full))
+            if (size >= cdc::kScanMinBytes &&
+                size >= cdc::big_file_threshold_bytes(full) &&
+                !cdc::is_system_file_name(full))
                 add_row(full, size);
         }
         free(full);
@@ -530,19 +525,19 @@ static void hash_index_groups(cdc_fileindex_t *idx, uint64_t serial, uint64_t st
  * ——中断后续跑只补缺失摘要，不重扫。 */
 static idx_outcome_t index_volume_incremental(cdc_fileindex_t *idx, const char *drive,
                                               uint64_t serial,
-                                              CdcUsnChangeSet *changes,
+                                              cdc::UsnChangeSet *changes,
                                               int quiet, int do_hash, double started) {
     idx_outcome_t o;
     memset(&o, 0, sizeof(o));
     o.status = IDX_FAILED;
-    uint64_t stamp_now = cdc_now_seconds();
-    o.deleted = cdc_fileindex_delete_rows(idx, serial, changes->deleted_frns,
-                                          changes->n_deleted);
-    for (size_t i = 0; i < changes->n_renamed; i++) {
-        o.renamed += cdc_fileindex_update_path_prefix(idx, serial, changes->renamed_old[i],
-                                                      changes->renamed_new[i]);
+    uint64_t stamp_now = cdc::now_seconds();
+    o.deleted = cdc_fileindex_delete_rows(idx, serial, changes->deleted_frns.data(),
+                                          changes->deleted_frns.size());
+    for (size_t i = 0; i < changes->renamed_old.size(); i++) {
+        o.renamed += cdc_fileindex_update_path_prefix(idx, serial, changes->renamed_old[i].c_str(),
+                                                      changes->renamed_new[i].c_str());
     }
-    size_t n = changes->n_files;
+    size_t n = changes->files.size();
     cdc_index_row_t *rows = NULL;
     if (n > 0) {
         rows = (cdc_index_row_t *)malloc(n * sizeof(*rows));
@@ -553,7 +548,7 @@ static idx_outcome_t index_volume_incremental(cdc_fileindex_t *idx, const char *
         for (size_t i = 0; i < n; i++) {
             rows[i].volume_serial = serial;
             rows[i].frn = changes->files[i].frn;
-            rows[i].path = changes->files[i].path;
+            rows[i].path = (char *)changes->files[i].path.c_str();
             rows[i].size = changes->files[i].size;
             rows[i].mtime = changes->files[i].mtime;
             rows[i].last_seen = stamp_now;
@@ -596,40 +591,25 @@ static idx_outcome_t index_volume_backfill(cdc_fileindex_t *idx, const char *dri
                                            uint64_t serial, uint64_t journal_id,
                                            int64_t next_usn, int quiet) {
     double started = now_mono();
-    uint64_t stamp_now = cdc_now_seconds();
+    uint64_t stamp_now = cdc::now_seconds();
     idx_outcome_t o;
     memset(&o, 0, sizeof(o));
     o.status = IDX_FAILED;
-    CdcFileEntryList list;
-    memset(&list, 0, sizeof(list));
-    if (cdc_scan_files(drive, CDC_INDEX_MIN_SIZE, CDC_TOP_SKIP, CDC_TOP_SKIP_N,
-                       NULL, NULL, &list) != 0) {
+    cdc::FileEntryList list;
+    if (cdc::scan_files(drive, CDC_INDEX_MIN_SIZE, cdc::kTopSkip, nullptr, list) != 0) {
         /* 枚举失败：按空卷处理（与 Rust 的 Vec 为空同义；游标照常写）。 */
-        memset(&list, 0, sizeof(list));
+        list.clear();
     }
-    size_t total_entries = list.n;
+    size_t total_entries = list.size();
     /* 跳过无 FRN 的条目（遍历回退的条目没有 FRN，进不了索引）；MFT 里
      * 没有 mtime 的读文件属性（与 scan_dups 一致）。 */
-    CdcFileEntry *res = NULL;
-    size_t n_res = 0;
-    if (list.n > 0) {
-        res = (CdcFileEntry *)malloc(list.n * sizeof(*res));
-        if (!res) {
-            cdc_file_entry_list_free(&list);
-            o.elapsed_secs = now_mono() - started;
-            return o;
-        }
-        for (size_t i = 0; i < list.n; i++) {
-            if (list.items[i].frn == 0) continue;
-            res[n_res] = list.items[i];
-            if (res[n_res].mtime == 0) {
-                res[n_res].mtime = file_mtime(list.items[i].path);
-            }
-            /* list 里的 path 所有权转给 res（下面 free 时只 free 一次）。 */
-            list.items[i].path = NULL;
-            n_res++;
-        }
+    std::vector<cdc::FileEntry> res;
+    for (cdc::FileEntry &e : list) {
+        if (e.frn == 0) continue;
+        if (e.mtime == 0) e.mtime = file_mtime(e.path.c_str());
+        res.push_back(std::move(e));
     }
+    size_t n_res = res.size();
     size_t skipped = total_entries - n_res;
     cdc_index_row_t *rows = NULL;
     if (n_res > 0) {
@@ -638,7 +618,7 @@ static idx_outcome_t index_volume_backfill(cdc_fileindex_t *idx, const char *dri
             for (size_t i = 0; i < n_res; i++) {
                 rows[i].volume_serial = serial;
                 rows[i].frn = res[i].frn;
-                rows[i].path = res[i].path;
+                rows[i].path = (char *)res[i].path.c_str();
                 rows[i].size = res[i].size;
                 rows[i].mtime = res[i].mtime;
                 rows[i].last_seen = stamp_now;
@@ -655,7 +635,7 @@ static idx_outcome_t index_volume_backfill(cdc_fileindex_t *idx, const char *dri
     if (n_res > 0) {
         paths = (const char **)malloc(n_res * sizeof(char *));
         if (paths) {
-            for (size_t i = 0; i < n_res; i++) paths[i] = res[i].path;
+            for (size_t i = 0; i < n_res; i++) paths[i] = res[i].path.c_str();
         }
     }
     cdc_hashcache_t *cache = cdc_hashcache_load_for_paths(paths, n_res);
@@ -665,9 +645,6 @@ static idx_outcome_t index_volume_backfill(cdc_fileindex_t *idx, const char *dri
         seeded = (cdc_digest_set_t *)calloc(n_res, sizeof(*seeded));
         if (!seeded) {
             if (cache) cdc_hashcache_close(cache);
-            cdc_file_entry_list_free(&list);
-            for (size_t i = 0; i < n_res; i++) free(res[i].path);
-            free(res);
             o.elapsed_secs = now_mono() - started;
             return o;
         }
@@ -676,9 +653,6 @@ static idx_outcome_t index_volume_backfill(cdc_fileindex_t *idx, const char *dri
     cdc_vec_t reuse_v;
     if (cdc_vec_init(&reuse_v, sizeof(cdc_digest_update_t)) != CDC_OK) {
         if (cache) cdc_hashcache_close(cache);
-        cdc_file_entry_list_free(&list);
-        for (size_t i = 0; i < n_res; i++) free(res[i].path);
-        free(res);
         free(seeded);
         o.elapsed_secs = now_mono() - started;
         return o;
@@ -701,7 +675,7 @@ static idx_outcome_t index_volume_backfill(cdc_fileindex_t *idx, const char *dri
         if (cache) {
             cdc_digest_set_t ce;
             memset(&ce, 0, sizeof(ce));
-            if (cdc_hashcache_entry_for(cache, res[i].path, res[i].size,
+            if (cdc_hashcache_entry_for(cache, res[i].path.c_str(), res[i].size,
                                         res[i].mtime, &ce) == 1) {
                 cdc_digest_set_t tmp;
                 merge_digests(&tmp, &merged, &ce);
@@ -734,7 +708,7 @@ static idx_outcome_t index_volume_backfill(cdc_fileindex_t *idx, const char *dri
         inputs = (cdc_scan_input_t *)malloc(n_res * sizeof(*inputs));
         if (inputs) {
             for (size_t i = 0; i < n_res; i++) {
-                inputs[i].path = res[i].path;
+                inputs[i].path = res[i].path.c_str();
                 inputs[i].size = res[i].size;
                 inputs[i].mtime = res[i].mtime;
                 inputs[i].frn = res[i].frn;
@@ -770,9 +744,6 @@ static idx_outcome_t index_volume_backfill(cdc_fileindex_t *idx, const char *dri
              (unsigned long long)reused_full, (unsigned long long)newly, elapsed);
     if (!quiet) printf("%s\n", line);
     index_log(line);
-    cdc_file_entry_list_free(&list);
-    for (size_t i = 0; i < n_res; i++) free(res[i].path);
-    free(res);
     free(seeded);
     o.status = IDX_BACKFILLED;
     o.files = (uint64_t)n_res;
@@ -792,7 +763,7 @@ static idx_outcome_t index_volume(cdc_fileindex_t *idx, const char *drive, int q
     fail.status = IDX_FAILED;
     uint64_t serial = 0, journal_id = 0;
     int64_t first_usn = 0, next_usn = 0;
-    if (cdc_volume_usn_state(drive, &serial, &journal_id, &first_usn, &next_usn) !=
+    if (cdc::volume_usn_state(drive, serial, journal_id, first_usn, next_usn) !=
         0) {
         char msg[1024];
         snprintf(msg, sizeof(msg), "--index：%s 打不开卷或 USN 日志。", drive);
@@ -809,16 +780,14 @@ static idx_outcome_t index_volume(cdc_fileindex_t *idx, const char *drive, int q
         int64_t stored_next = 0;
         if (cdc_fileindex_get_usn_state(idx, serial, &stored_journal, &stored_next) ==
                 1 &&
-            cdc_usn_state_usable(stored_journal, stored_next, journal_id,
+            cdc::usn_state_usable(stored_journal, stored_next, journal_id,
                                            first_usn, next_usn)) {
-            CdcUsnChangeSet changes;
-            memset(&changes, 0, sizeof(changes));
-            int rc = cdc_usn_changes_since(drive, stored_journal, stored_next,
-                                           CDC_TOP_SKIP, CDC_TOP_SKIP_N, &changes);
+            cdc::UsnChangeSet changes;
+            int rc = cdc::usn_changes_since(drive, stored_journal, stored_next,
+                                            cdc::kTopSkip, changes);
             if (rc == 0) {
                 idx_outcome_t o = index_volume_incremental(idx, drive, serial, &changes,
                                                            quiet, do_hash, started);
-                cdc_usn_change_set_free(&changes);
                 return o;
             }
             /* 变化集取不到（无快照 / 变化太多 / 日志读失败）：回落全量回填。 */
@@ -836,25 +805,22 @@ static int index_volume_incremental_only(cdc_fileindex_t *idx, const char *drive
                                          int quiet, int do_hash) {
     uint64_t serial = 0, journal_id = 0;
     int64_t first_usn = 0, next_usn = 0;
-    if (cdc_volume_usn_state(drive, &serial, &journal_id, &first_usn,
-                             &next_usn) != 0)
+    if (cdc::volume_usn_state(drive, serial, journal_id, first_usn,
+                             next_usn) != 0)
         return 0;
     uint64_t stored_journal = 0;
     int64_t stored_next = 0;
     if (cdc_fileindex_get_usn_state(idx, serial, &stored_journal,
                                     &stored_next) != 1)
         return 0;
-    if (!cdc_usn_state_usable(stored_journal, stored_next, journal_id,
+    if (!cdc::usn_state_usable(stored_journal, stored_next, journal_id,
                               first_usn, next_usn))
         return 0;
-    CdcUsnChangeSet changes;
-    memset(&changes, 0, sizeof(changes));
-    if (cdc_usn_changes_since(drive, stored_journal, stored_next,
-                              CDC_TOP_SKIP, CDC_TOP_SKIP_N, &changes) != 0)
+    cdc::UsnChangeSet changes;
+    if (cdc::usn_changes_since(drive, stored_journal, stored_next, cdc::kTopSkip, changes) != 0)
         return 0;
     idx_outcome_t o = index_volume_incremental(idx, drive, serial, &changes,
                                                quiet, do_hash, now_mono());
-    cdc_usn_change_set_free(&changes);
     return o.status == IDX_INCREMENTED ? 1 : 0;
 }
 
@@ -867,15 +833,15 @@ int cdc_index_freshness(cdc_fileindex_t *idx, const char *drive,
     int64_t first_usn = 0, next_usn = 0;
     const char *state = "unavailable";
     if (serial_out) *serial_out = 0;
-    if (cdc_volume_usn_state(drive, &serial, &journal_id, &first_usn,
-                             &next_usn) == 0) {
+    if (cdc::volume_usn_state(drive, serial, journal_id, first_usn,
+                             next_usn) == 0) {
         if (serial_out) *serial_out = serial;
         uint64_t stored_journal = 0;
         int64_t stored_next = 0;
         if (cdc_fileindex_get_usn_state(idx, serial, &stored_journal,
                                         &stored_next) != 1) {
             state = "missing";
-        } else if (!cdc_usn_state_usable(stored_journal, stored_next,
+        } else if (!cdc::usn_state_usable(stored_journal, stored_next,
                                          journal_id, first_usn, next_usn)) {
             state = "stale";
         } else {
@@ -1029,7 +995,7 @@ int main(int argc, char **argv) {
     if (argc >= 3 && strcmp(argv[1], "probe") == 0) {
         wchar_t drive[4] = {0};
         drive[0] = (wchar_t)argv[2][0];
-        return cdc_mft_probe_volume(drive);
+        return cdc::mft_probe_volume(drive);
     }
 #endif
     if (argc == 1) {

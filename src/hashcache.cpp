@@ -587,7 +587,7 @@ int cdc_hashcache_save_dirty(cdc_hashcache_t *cache) {
     }
     sqlite3 *db = NULL;
     if (open_conn(cache->db_path, &db) != 0) return -1;
-    uint64_t now = cdc_now_seconds();
+    uint64_t now = cdc::now_seconds();
     uint64_t cutoff = now >= (uint64_t)30 * 86400 ? now - (uint64_t)30 * 86400 : 0;
     int rc = -1;
     char *emsg = NULL;

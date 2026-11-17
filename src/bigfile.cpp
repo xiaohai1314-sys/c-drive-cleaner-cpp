@@ -1,79 +1,86 @@
-/* bigfile.c — 阈值表与 Rust 版 main.rs:697 一一对应，分组注释同款。*/
+// bigfile.cpp — 阈值表与 Rust 版 main.rs:697 一一对应，分组注释同款。
 #include "bigfile.h"
 
-#include <ctype.h>
-#include <string.h>
+#include <array>
+#include <cctype>
+#include <string>
 
-/* 取 basename 里最后一个 '.' 后的扩展名，小写进 buf；无扩展名则 buf 为 ""。
- * Rust Path::extension() 对 ".gitignore" 这类名前置点返回 None，这里同款处理。 */
-static void ext_lower(const char *path, char *buf, size_t bufsz) {
-    const char *base = path;
-    for (const char *p = path; *p; p++)
-        if (*p == '/' || *p == '\\') base = p + 1;
-    const char *dot = NULL;
-    for (const char *p = base; *p; p++)
-        if (*p == '.') dot = p;
-    if (!dot || dot == base || dot[1] == '\0') { buf[0] = '\0'; return; }
-    size_t i = 0;
-    for (const char *p = dot + 1; *p && i + 1 < bufsz; p++, i++)
-        buf[i] = (char)tolower((unsigned char)*p);
-    buf[i] = '\0';
+namespace cdc {
+namespace {
+
+std::string_view base_name(std::string_view path) {
+    size_t slash = path.find_last_of("/\\");
+    return slash == std::string_view::npos ? path : path.substr(slash + 1);
 }
 
-static int in_list(const char *ext, const char *const *list, size_t n) {
-    for (size_t i = 0; i < n; i++)
-        if (strcmp(ext, list[i]) == 0) return 1;
-    return 0;
+// 取 basename 里最后一个 '.' 后的扩展名（小写，最多 31 字节）；无扩展名返回 ""。
+// Rust Path::extension() 对 ".gitignore" 这类名前置点返回 None，这里同款处理。
+std::string ext_lower(std::string_view path) {
+    std::string_view base = base_name(path);
+    size_t dot = base.rfind('.');
+    if (dot == std::string_view::npos || dot == 0 || dot + 1 == base.size()) return {};
+    std::string ext;
+    for (char c : base.substr(dot + 1)) {
+        if (ext.size() == 31) break;
+        ext.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
+    }
+    return ext;
 }
 
-uint64_t cdc_big_file_threshold_bytes(const char *path) {
-    char ext[32];
-    ext_lower(path, ext, sizeof ext);
-
-    static const char *const installer[] = {"exe", "msi"};
-    static const char *const video[] = {"mp4", "avi", "mov", "mkv", "wmv", "flv",
-        "m4v", "3gp", "mpeg", "mpg", "ts", "webm", "rmvb", "vob", "dv", "swf"};
-    static const char *const audio[] = {"mp3", "ape", "wav", "flac", "aac", "ogg",
-        "m4a", "ac3", "dts", "mka", "opus", "wma", "mid"};
-    static const char *const archive[] = {"zip", "rar", "7z", "gz", "iso", "img",
-        "tar", "bz2", "xz", "cab", "fzip", "rar4"};
-    static const char *const mobile_pkg[] = {"apk", "ipa", "ipsw"};
-    static const char *const pack_dbg[] = {"pack", "wim", "pima", "lib", "pdb",
-        "rb", "torrent"};
-    static const char *const image[] = {"jpg", "jpeg", "png", "gif", "bmp", "tiff",
-        "tif", "webp", "heic", "ico", "raw", "psd", "svg"};
-    static const char *const doc[] = {"txt", "csv", "pdf", "doc", "docx", "xls",
-        "xlsx", "ppt", "pptx", "odf", "wps", "wpt", "dot", "dotx", "docm",
-        "xlsm", "rtf", "odt", "dwg", "dxf", "md", "et", "dps", "ofd",
-        "xmind", "vsdx"};
-    static const char *const log[] = {"log", "xlog", "dump", "dmp", "lg", "tlg",
-        "ttd", "xltd"};
-
-    if (in_list(ext, installer, 2)) return 100 * CDC_MB;
-    if (in_list(ext, video, 16)) return 20 * CDC_MB;
-    if (strcmp(ext, "tmp") == 0) return 20 * CDC_MB;
-    if (in_list(ext, audio, 13)) return 5 * CDC_MB;
-    if (in_list(ext, archive, 12)) return 5 * CDC_MB;
-    if (in_list(ext, mobile_pkg, 3)) return 5 * CDC_MB;
-    if (in_list(ext, pack_dbg, 7)) return 5 * CDC_MB;
-    if (in_list(ext, image, 13)) return 2 * CDC_MB;
-    if (in_list(ext, doc, 26)) return 2 * CDC_MB;
-    if (in_list(ext, log, 8)) return 2 * CDC_MB;
-    return 50 * CDC_MB; /* 兜底（毒霸 id 120 的 `*` 规则） */
+template <size_t N>
+bool in_list(std::string_view ext, const std::array<std::string_view, N> &list) {
+    for (std::string_view e : list)
+        if (ext == e) return true;
+    return false;
 }
 
-int cdc_is_system_file_name(const char *path) {
-    const char *base = path;
-    for (const char *p = path; *p; p++)
-        if (*p == '/' || *p == '\\') base = p + 1;
-    char lower[64];
-    size_t i = 0;
-    for (const char *p = base; *p && i + 1 < sizeof lower; p++, i++)
-        lower[i] = (char)tolower((unsigned char)*p);
-    lower[i] = '\0';
-    return strcmp(lower, "pagefile.sys") == 0 ||
-           strcmp(lower, "hiberfil.sys") == 0 ||
-           strcmp(lower, "swapfile.sys") == 0 ||
-           strcmp(lower, "dumpstack.log.tmp") == 0 ||
-           strcmp(lower, "memory.dmp") == 0;
+constexpr std::array<std::string_view, 2> kInstaller{"exe", "msi"};
+constexpr std::array<std::string_view, 16> kVideo{"mp4", "avi",  "mov",  "mkv", "wmv", "flv",
+                                                  "m4v", "3gp",  "mpeg", "mpg", "ts",  "webm",
+                                                  "rmvb", "vob", "dv",   "swf"};
+constexpr std::array<std::string_view, 13> kAudio{"mp3", "ape", "wav", "flac", "aac",
+                                                  "ogg", "m4a", "ac3", "dts",  "mka",
+                                                  "opus", "wma", "mid"};
+constexpr std::array<std::string_view, 12> kArchive{"zip", "rar", "7z",  "gz",  "iso",  "img",
+                                                    "tar", "bz2", "xz", "cab", "fzip", "rar4"};
+constexpr std::array<std::string_view, 3> kMobilePkg{"apk", "ipa", "ipsw"};
+constexpr std::array<std::string_view, 7> kPackDbg{"pack", "wim", "pima", "lib",
+                                                   "pdb",  "rb",  "torrent"};
+constexpr std::array<std::string_view, 13> kImage{"jpg", "jpeg", "png", "gif",  "bmp",
+                                                  "tiff", "tif", "webp", "heic", "ico",
+                                                  "raw", "psd",  "svg"};
+constexpr std::array<std::string_view, 26> kDoc{
+    "txt",  "csv",  "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx",
+    "odf",  "wps",  "wpt", "dot", "dotx", "docm", "xlsm", "rtf", "odt",
+    "dwg",  "dxf",  "md",  "et",  "dps",  "ofd", "xmind", "vsdx"};
+constexpr std::array<std::string_view, 8> kLog{"log", "xlog", "dump", "dmp",
+                                               "lg",  "tlg",  "ttd",  "xltd"};
+
+}  // namespace
+
+uint64_t big_file_threshold_bytes(std::string_view path) {
+    std::string ext = ext_lower(path);
+    if (in_list(ext, kInstaller)) return 100 * kMB;
+    if (in_list(ext, kVideo)) return 20 * kMB;
+    if (ext == "tmp") return 20 * kMB;
+    if (in_list(ext, kAudio)) return 5 * kMB;
+    if (in_list(ext, kArchive)) return 5 * kMB;
+    if (in_list(ext, kMobilePkg)) return 5 * kMB;
+    if (in_list(ext, kPackDbg)) return 5 * kMB;
+    if (in_list(ext, kImage)) return 2 * kMB;
+    if (in_list(ext, kDoc)) return 2 * kMB;
+    if (in_list(ext, kLog)) return 2 * kMB;
+    return 50 * kMB;  // 兜底（毒霸 id 120 的 `*` 规则）
 }
+
+bool is_system_file_name(std::string_view path) {
+    std::string lower;
+    for (char c : base_name(path)) {
+        if (lower.size() == 63) break;  // 与 C 版 char lower[64] 同样截断
+        lower.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
+    }
+    return lower == "pagefile.sys" || lower == "hiberfil.sys" || lower == "swapfile.sys" ||
+           lower == "dumpstack.log.tmp" || lower == "memory.dmp";
+}
+
+}  // namespace cdc

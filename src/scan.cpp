@@ -25,6 +25,9 @@
 
 #include "scan.h"
 
+#include <algorithm>
+#include <string_view>
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -137,7 +140,7 @@ static CdcFile *open_checked_with_size(const char *path, uint64_t frn, uint32_t 
  * 返回 -1；文件尾短读只摘要读到的部分（与 Rust 的 hash_chunk 一致，
  * 算法换成 XXH3）。 */
 static int hash_chunk_xxh(CdcFile *f, uint8_t *buf, size_t buflen, uint64_t offset,
-                          uint64_t length, cdc_xxh3_state_t *st) {
+                          uint64_t length, cdc::Xxh3State *st) {
     uint64_t remaining = length;
     uint64_t pos = offset;
     while (remaining > 0) {
@@ -145,7 +148,7 @@ static int hash_chunk_xxh(CdcFile *f, uint8_t *buf, size_t buflen, uint64_t offs
         size_t got = 0;
         if (cdc_file_read_at(f, pos, buf, want, &got) != 0) return -1;
         if (got == 0) break;
-        if (cdc_xxh3_state_update(st, buf, got) != 0) return -1;
+        if (st->update(buf, got) != 0) return -1;
         pos += got;
         remaining -= got;
     }
@@ -171,7 +174,7 @@ static int whole_file_xxh_by_frn(const char *path, uint64_t frn, uint64_t size,
         cdc_file_close(f);
         return -1;
     }
-    cdc_xxh3_state_t *st = cdc_xxh3_state_new();
+    auto st = cdc::Xxh3State::create();
     if (!st) {
         free(buf);
         cdc_file_close(f);
@@ -185,17 +188,16 @@ static int whole_file_xxh_by_frn(const char *path, uint64_t frn, uint64_t size,
             break;
         }
         if (got == 0) break;
-        if (cdc_xxh3_state_update(st, buf, got) != 0) {
+        if (st->update(buf, got) != 0) {
             rc = -1;
             break;
         }
     }
-    uint64_t xxh = cdc_xxh3_state_finalize(st);
-    cdc_xxh3_state_free(st);
+    uint64_t xxh = st->finalize();
     free(buf);
     cdc_file_close(f);
     if (rc != 0) return -1;
-    cdc_xxh_to_digest32(xxh, digest);
+    cdc::xxh_to_digest32(xxh, digest);
     if (fid_out) *fid_out = id;
     if (has_fid_out) *has_fid_out = hid;
     return 0;
@@ -268,7 +270,7 @@ static int sample_hash_by_frn(const char *path, uint64_t frn, uint64_t size,
         cdc_file_close(f);
         return -1;
     }
-    cdc_xxh3_state_t *st = cdc_xxh3_state_new();
+    auto st = cdc::Xxh3State::create();
     if (!st) {
         free(buf);
         cdc_file_close(f);
@@ -276,21 +278,20 @@ static int sample_hash_by_frn(const char *path, uint64_t frn, uint64_t size,
     }
     int rc = 0;
     if (hash_chunk_xxh(f, buf, (size_t)CDC_SCAN_SAMPLE_CHUNK, 0, CDC_SCAN_SAMPLE_CHUNK,
-                      st) != 0)
+                      st.get()) != 0)
         rc = -1;
     else if (hash_chunk_xxh(f, buf, (size_t)CDC_SCAN_SAMPLE_CHUNK, size / 2,
-                            CDC_SCAN_SAMPLE_CHUNK, st) != 0)
+                            CDC_SCAN_SAMPLE_CHUNK, st.get()) != 0)
         rc = -1;
     else if (hash_chunk_xxh(f, buf, (size_t)CDC_SCAN_SAMPLE_CHUNK,
                             size - CDC_SCAN_SAMPLE_CHUNK, CDC_SCAN_SAMPLE_CHUNK,
-                            st) != 0)
+                            st.get()) != 0)
         rc = -1;
-    uint64_t xxh = cdc_xxh3_state_finalize(st);
-    cdc_xxh3_state_free(st);
+    uint64_t xxh = st->finalize();
     free(buf);
     cdc_file_close(f);
     if (rc != 0) return -1;
-    cdc_xxh_to_digest32(xxh, digest);
+    cdc::xxh_to_digest32(xxh, digest);
     if (fid_out) *fid_out = id;
     if (has_fid_out) *has_fid_out = hid;
     return 0;
@@ -313,7 +314,7 @@ static int strong_hash_by_frn(const char *path, uint64_t frn, uint64_t size,
         cdc_file_close(f);
         return -1;
     }
-    cdc_xxh3_state_t *st = cdc_xxh3_state_new();
+    auto st = cdc::Xxh3State::create();
     if (!st) {
         free(buf);
         cdc_file_close(f);
@@ -321,21 +322,20 @@ static int strong_hash_by_frn(const char *path, uint64_t frn, uint64_t size,
     }
     int rc = 0;
     if (hash_chunk_xxh(f, buf, (size_t)CDC_SCAN_STRONG_CHUNK, 0, CDC_SCAN_STRONG_CHUNK,
-                      st) != 0)
+                      st.get()) != 0)
         rc = -1;
     else if (hash_chunk_xxh(f, buf, (size_t)CDC_SCAN_STRONG_CHUNK, size / 2,
-                            CDC_SCAN_STRONG_CHUNK, st) != 0)
+                            CDC_SCAN_STRONG_CHUNK, st.get()) != 0)
         rc = -1;
     else if (hash_chunk_xxh(f, buf, (size_t)CDC_SCAN_STRONG_CHUNK,
                             size - CDC_SCAN_STRONG_CHUNK, CDC_SCAN_STRONG_CHUNK,
-                            st) != 0)
+                            st.get()) != 0)
         rc = -1;
-    uint64_t xxh = cdc_xxh3_state_finalize(st);
-    cdc_xxh3_state_free(st);
+    uint64_t xxh = st->finalize();
     free(buf);
     cdc_file_close(f);
     if (rc != 0) return -1;
-    cdc_xxh_to_digest32(xxh, digest);
+    cdc::xxh_to_digest32(xxh, digest);
     if (fid_out) *fid_out = id;
     if (has_fid_out) *has_fid_out = hid;
     return 0;
@@ -355,7 +355,7 @@ static int probe_hash_by_frn(const char *path, uint64_t frn, uint64_t size,
         cdc_file_close(f);
         return -1;
     }
-    cdc_xxh3_state_t *st = cdc_xxh3_state_new();
+    auto st = cdc::Xxh3State::create();
     if (!st) {
         free(buf);
         cdc_file_close(f);
@@ -366,15 +366,14 @@ static int probe_hash_by_frn(const char *path, uint64_t frn, uint64_t size,
     uint64_t off2 = size * 3 / 4 < tail ? size * 3 / 4 : tail;
     uint64_t len = CDC_SCAN_PROBE_CHUNK < size ? CDC_SCAN_PROBE_CHUNK : size;
     int rc = 0;
-    if (hash_chunk_xxh(f, buf, (size_t)CDC_SCAN_PROBE_CHUNK, off1, len, st) != 0) rc = -1;
-    else if (hash_chunk_xxh(f, buf, (size_t)CDC_SCAN_PROBE_CHUNK, off2, len, st) != 0)
+    if (hash_chunk_xxh(f, buf, (size_t)CDC_SCAN_PROBE_CHUNK, off1, len, st.get()) != 0) rc = -1;
+    else if (hash_chunk_xxh(f, buf, (size_t)CDC_SCAN_PROBE_CHUNK, off2, len, st.get()) != 0)
         rc = -1;
-    uint64_t xxh = cdc_xxh3_state_finalize(st);
-    cdc_xxh3_state_free(st);
+    uint64_t xxh = st->finalize();
     free(buf);
     cdc_file_close(f);
     if (rc != 0) return -1;
-    cdc_xxh_to_digest32(xxh, digest);
+    cdc::xxh_to_digest32(xxh, digest);
     if (fid_out) *fid_out = id;
     if (has_fid_out) *has_fid_out = hid;
     return 0;
@@ -416,24 +415,23 @@ static int read_hdd_seq_sample_and_full(const char *path, uint64_t frn, uint64_t
     size_t c = (size_t)chunk_len;
     if (s <= c * 3) {
         /* 小文件：采样即全文 XXH3（与 whole_file_xxh_by_frn 同值）。 */
-        cdc_xxh3_buf_to_digest32(buf, s, sample);
+        cdc::xxh3_buf_to_digest32(buf, s, sample);
     } else {
-        cdc_xxh3_state_t *st = cdc_xxh3_state_new();
+        auto st = cdc::Xxh3State::create();
         if (!st) {
             free(buf);
             return -1;
         }
         int xrc = 0;
-        if (cdc_xxh3_state_update(st, buf, c) != 0) xrc = -1;
-        else if (cdc_xxh3_state_update(st, buf + s / 2, c) != 0) xrc = -1;
-        else if (cdc_xxh3_state_update(st, buf + s - c, c) != 0) xrc = -1;
-        uint64_t xxh = cdc_xxh3_state_finalize(st);
-        cdc_xxh3_state_free(st);
+        if (st->update(buf, c) != 0) xrc = -1;
+        else if (st->update(buf + s / 2, c) != 0) xrc = -1;
+        else if (st->update(buf + s - c, c) != 0) xrc = -1;
+        uint64_t xxh = st->finalize();
         if (xrc != 0) {
             free(buf);
             return -1;
         }
-        cdc_xxh_to_digest32(xxh, sample);
+        cdc::xxh_to_digest32(xxh, sample);
     }
     free(buf);
     if (fid_out) *fid_out = id;
@@ -710,7 +708,7 @@ static void stage_strong_work(void *ctx, size_t i) {
                 cand->file_id = fid;
                 cand->has_file_id = 1;
             }
-            cand->digests.strong_xxh = cdc_xxh_from_digest32(strong);
+            cand->digests.strong_xxh = cdc::xxh_from_digest32(strong);
             cand->digests.has_strong_xxh = 1;
             memcpy(cand->digests.full.bytes, full, 32);
             cand->digests.has_full = 1;
@@ -727,7 +725,7 @@ static void stage_strong_work(void *ctx, size_t i) {
                 cand->file_id = fid;
                 cand->has_file_id = 1;
             }
-            cand->digests.strong_xxh = cdc_xxh_from_digest32(digest);
+            cand->digests.strong_xxh = cdc::xxh_from_digest32(digest);
             cand->digests.has_strong_xxh = 1;
             cand->dirty_strong_xxh = 1;
             /* 注意：strong 是 XXH3，full 是 BLAKE3，算法不同，
@@ -756,7 +754,7 @@ static void stage_sample_work(void *ctx, size_t i) {
                 cand->file_id = fid;
                 cand->has_file_id = 1;
             }
-            cand->digests.sample_xxh = cdc_xxh_from_digest32(sample);
+            cand->digests.sample_xxh = cdc::xxh_from_digest32(sample);
             cand->digests.has_sample_xxh = 1;
             memcpy(cand->digests.full.bytes, full, 32);
             cand->digests.has_full = 1;
@@ -773,7 +771,7 @@ static void stage_sample_work(void *ctx, size_t i) {
                 cand->file_id = fid;
                 cand->has_file_id = 1;
             }
-            cand->digests.sample_xxh = cdc_xxh_from_digest32(digest);
+            cand->digests.sample_xxh = cdc::xxh_from_digest32(digest);
             cand->digests.has_sample_xxh = 1;
             cand->dirty_sample_xxh = 1;
             /* 注意：sample 是 XXH3，full 是 BLAKE3，不能再像旧版
@@ -797,7 +795,7 @@ static void stage_probe_work(void *ctx, size_t i) {
             cand->file_id = fid;
             cand->has_file_id = 1;
         }
-        cand->probe_xxh = cdc_xxh_from_digest32(digest);
+        cand->probe_xxh = cdc::xxh_from_digest32(digest);
         cand->has_probe = 1;
     }
     call_tick(opts);
@@ -929,7 +927,7 @@ static int run_dup_pipeline(DupCandidate *items, size_t n, const char *label,
                         for (size_t k = 0; k < got; k++) {
                             DupCandidate *c = &items[results[k].idx];
                             c->digests.head_xxh =
-                                cdc_xxh_from_digest32(results[k].digest);
+                                cdc::xxh_from_digest32(results[k].digest);
                             c->digests.has_head_xxh = 1;
                             c->dirty_head_xxh = 1;
                             if (c->size <= CDC_SCAN_HEAD_CHUNK) {
@@ -1009,7 +1007,7 @@ static int run_dup_pipeline(DupCandidate *items, size_t n, const char *label,
                             c->file_id = res[k].file_id;
                             c->has_file_id = 1;
                         }
-                        c->digests.head_xxh = cdc_xxh_from_digest32(res[k].digest);
+                        c->digests.head_xxh = cdc::xxh_from_digest32(res[k].digest);
                         c->digests.has_head_xxh = 1;
                         c->dirty_head_xxh = 1;
                         if (c->size <= CDC_SCAN_HEAD_CHUNK) {
@@ -1422,7 +1420,7 @@ static int final_digest_eq(const DupCandidate *a, const DupCandidate *b, int fas
 static void final_digest_hex(const DupCandidate *c, int fast, char out[65]) {
     if (fast) {
         char tmp[17];
-        cdc_xxh_to_hex(c->digests.strong_xxh, tmp);
+        cdc::xxh_to_hex(c->digests.strong_xxh, tmp);
         strcpy(out, tmp);
     } else {
         cdc_digest_to_hex(&c->digests.full, out);
@@ -1693,10 +1691,9 @@ int cdc_scan_hash_groups(const cdc_scan_input_t *inputs, size_t n,
 
 /* ---------------- 实时扫描入口 ---------------- */
 
-static int cmp_entry_by_size(const void *a, const void *b) {
-    const CdcFileEntry *x = (const CdcFileEntry *)a, *y = (const CdcFileEntry *)b;
-    if (x->size != y->size) return x->size < y->size ? -1 : 1;
-    return strcmp(x->path, y->path);
+static bool entry_less_by_size(const cdc::FileEntry &x, const cdc::FileEntry &y) {
+    if (x.size != y.size) return x.size < y.size;
+    return strcmp(x.path.c_str(), y.path.c_str()) < 0;
 }
 
 static int cmp_big_file(const void *a, const void *b) {
@@ -1705,11 +1702,11 @@ static int cmp_big_file(const void *a, const void *b) {
     return strcmp(x->path, y->path);
 }
 
-static int candidate_from_entry(const CdcFileEntry *e, uint64_t mtime,
+static int candidate_from_entry(const cdc::FileEntry *e, uint64_t mtime,
                                 cdc_hashcache_t *cache, CdcDiskCache *dcache,
                                 DupCandidate *out) {
     memset(out, 0, sizeof *out);
-    out->path = dup_str(e->path);
+    out->path = dup_str(e->path.c_str());
     if (!out->path) return -1;
     out->size = e->size;
     out->mtime = mtime;
@@ -1718,12 +1715,12 @@ static int candidate_from_entry(const CdcFileEntry *e, uint64_t mtime,
     out->first_lcn = e->first_lcn;
     out->bytes_per_cluster = e->bytes_per_cluster;
     out->can_raw_read = e->can_raw_read;
-    out->disk = disk_key_for_path(e->path, dcache);
+    out->disk = disk_key_for_path(e->path.c_str(), dcache);
     out->is_ssd = (out->disk.kind == CDC_DISK_SSD);
     if (cache) {
         cdc_digest_set_t ce;
         memset(&ce, 0, sizeof ce);
-        if (cdc_hashcache_entry_for(cache, e->path, e->size, mtime, &ce) == 1)
+        if (cdc_hashcache_entry_for(cache, e->path.c_str(), e->size, mtime, &ce) == 1)
             out->digests = ce;
     }
     return 0;
@@ -1750,10 +1747,6 @@ void cdc_dup_group_list_free(CdcDupGroupList *list) {
     list->n = list->cap = 0;
 }
 
-static int big_keep(const char *name, uint64_t size, void *ctx) {
-    (void)ctx;
-    return size >= cdc_big_file_threshold_bytes(name);
-}
 
 int cdc_scan_big(const char **drives, size_t n_drives, const CdcScanOpts *opts,
                  CdcBigFileList *out) {
@@ -1771,25 +1764,21 @@ int cdc_scan_big(const char **drives, size_t n_drives, const CdcScanOpts *opts,
     }
     for (size_t d = 0; d < n_use; d++) {
         if (is_cancelled(opts)) break;
-        CdcFileEntryList list;
-        memset(&list, 0, sizeof list);
-        if (cdc_scan_files(use[d], CDC_SCAN_MIN_BYTES, CDC_TOP_SKIP, CDC_TOP_SKIP_N,
-                           big_keep, NULL, &list) != 0) {
-            cdc_file_entry_list_free(&list);
+        cdc::FileEntryList list;
+        auto big_keep = [](std::string_view name, uint64_t size) {
+            return size >= cdc::big_file_threshold_bytes(name);
+        };
+        if (cdc::scan_files(use[d], cdc::kScanMinBytes, cdc::kTopSkip, big_keep, list) != 0)
             continue;
-        }
-        for (size_t i = 0; i < list.n; i++) {
-            CdcFileEntry *e = &list.items[i];
-            if (cdc_is_system_file_name(e->path)) continue;
-            if (e->size < cdc_big_file_threshold_bytes(e->path)) continue;
+        for (cdc::FileEntry &e : list) {
+            if (cdc::is_system_file_name(e.path)) continue;
+            if (e.size < cdc::big_file_threshold_bytes(e.path)) continue;
             CdcBigFile bf;
-            bf.path = e->path;
-            e->path = NULL; /* 所有权转给 bf */
-            bf.size = e->size;
-            bf.mtime = e->mtime ? e->mtime : cdc_file_mtime(bf.path);
-            if (big_file_list_push(out, bf) != 0) free(bf.path);
+            bf.path = dup_str(e.path.c_str());
+            bf.size = e.size;
+            bf.mtime = e.mtime ? e.mtime : cdc_file_mtime(bf.path);
+            if (!bf.path || big_file_list_push(out, bf) != 0) free(bf.path);
         }
-        cdc_file_entry_list_free(&list);
     }
     if (out->n > 1)
         qsort(out->items, out->n, sizeof(CdcBigFile), cmp_big_file);
@@ -1819,81 +1808,50 @@ int cdc_scan_dups(const char **roots, size_t n_roots, uint64_t min_size,
     }
     if (n_use == 0) return 0;
     /* 枚举（MFT 优先，失败退回遍历；系统文件在这里先滤掉）。 */
-    CdcFileEntryList all;
-    memset(&all, 0, sizeof all);
+    cdc::FileEntryList all;
     for (size_t d = 0; d < n_use; d++) {
         if (is_cancelled(opts)) break;
-        CdcFileEntryList list;
-        memset(&list, 0, sizeof list);
-        if (cdc_scan_files(use_roots[d], min, CDC_TOP_SKIP, CDC_TOP_SKIP_N, NULL,
-                           NULL, &list) != 0) {
-            cdc_file_entry_list_free(&list);
-            continue;
+        cdc::FileEntryList list;
+        if (cdc::scan_files(use_roots[d], min, cdc::kTopSkip, nullptr, list) != 0) continue;
+        for (cdc::FileEntry &e : list) {
+            if (cdc::is_system_file_name(e.path)) continue;
+            all.push_back(std::move(e));
         }
-        for (size_t i = 0; i < list.n; i++) {
-            if (cdc_is_system_file_name(list.items[i].path)) {
-                free(list.items[i].path);
-                list.items[i].path = NULL;
-                continue;
-            }
-            CdcFileEntry e = list.items[i];
-            list.items[i].path = NULL;
-            void *data = all.items;
-            size_t cap = all.cap;
-            if (all.n == all.cap) {
-                if (list_grow_raw(&data, &cap, sizeof(CdcFileEntry), all.n) != 0) {
-                    free(e.path);
-                    continue;
-                }
-                all.items = (CdcFileEntry *)data;
-                all.cap = cap;
-            }
-            all.items[all.n++] = e;
-        }
-        free(list.items);
     }
-    if (is_cancelled(opts)) {
-        cdc_file_entry_list_free(&all);
-        return 0;
-    }
-    if (all.n > 1)
-        qsort(all.items, all.n, sizeof(CdcFileEntry), cmp_entry_by_size);
+    if (is_cancelled(opts)) return 0;
+    if (all.size() > 1) std::sort(all.begin(), all.end(), entry_less_by_size);
     size_t candidates_count = 0;
     size_t i = 0;
-    while (i < all.n) {
+    while (i < all.size()) {
         size_t j = i + 1;
-        while (j < all.n && all.items[j].size == all.items[i].size) j++;
+        while (j < all.size() && all[j].size == all[i].size) j++;
         if (j - i >= 2) candidates_count += (j - i);
         i = j;
     }
     if (opts->trace)
         fprintf(stderr, "dup: 参与比对 %zu 个文件, 枚举用时 %.1fs\n", candidates_count,
                 now_mono() - started);
-    if (candidates_count == 0) {
-        cdc_file_entry_list_free(&all);
-        return 0;
-    }
+    if (candidates_count == 0) return 0;
     /* 缓存预加载（只加载候选路径）。 */
     const char **paths = (const char **)malloc(candidates_count * sizeof(char *));
     cdc_hashcache_t *cache = NULL;
     if (paths) {
         size_t p = 0;
         size_t k = 0;
-        while (k < all.n) {
+        while (k < all.size()) {
             size_t j = k + 1;
-            while (j < all.n && all.items[j].size == all.items[k].size) j++;
+            while (j < all.size() && all[j].size == all[k].size) j++;
             if (j - k >= 2) {
-                for (size_t m = k; m < j; m++) paths[p++] = all.items[m].path;
+                for (size_t m = k; m < j; m++) paths[p++] = all[m].path.c_str();
             }
             k = j;
         }
         cache = cdc_hashcache_load_for_paths(paths, candidates_count);
         free(paths);
     }
-    uint64_t stamp_now = cdc_now_seconds();
+    uint64_t stamp_now = cdc::now_seconds();
     DupCandidate *cands = (DupCandidate *)malloc(candidates_count * sizeof(DupCandidate));
     if (!cands) {
-        cdc_file_entry_list_free(&all);
         if (cache) cdc_hashcache_close(cache);
         return -1;
     }
@@ -1901,13 +1859,13 @@ int cdc_scan_dups(const char **roots, size_t n_roots, uint64_t min_size,
     CdcDiskCache dcache;
     memset(&dcache, 0, sizeof dcache);
     i = 0;
-    while (i < all.n) {
+    while (i < all.size()) {
         size_t j = i + 1;
-        while (j < all.n && all.items[j].size == all.items[i].size) j++;
+        while (j < all.size() && all[j].size == all[i].size) j++;
         if (j - i >= 2) {
             for (size_t m = i; m < j; m++) {
-                CdcFileEntry *e = &all.items[m];
-                uint64_t mtime = e->mtime ? e->mtime : cdc_file_mtime(e->path);
+                cdc::FileEntry *e = &all[m];
+                uint64_t mtime = e->mtime ? e->mtime : cdc_file_mtime(e->path.c_str());
                 DupCandidate c;
                 if (candidate_from_entry(e, mtime, cache, &dcache, &c) == 0)
                     cands[nc++] = c;
@@ -1915,7 +1873,7 @@ int cdc_scan_dups(const char **roots, size_t n_roots, uint64_t min_size,
         }
         i = j;
     }
-    cdc_file_entry_list_free(&all);
+    all = cdc::FileEntryList();
     /* cands 已按 size 排好（all 排过序，桶顺序保留）。 */
     cdc_vec_t ready, ssd_stage1, mixed_stage1;
     memset(&ready, 0, sizeof ready);
@@ -2023,7 +1981,7 @@ uint64_t cdc_file_mtime(const char *path) {
         ULARGE_INTEGER ft;
         ft.LowPart = attr.ftLastWriteTime.dwLowDateTime;
         ft.HighPart = attr.ftLastWriteTime.dwHighDateTime;
-        out = mft_filetime_to_unix(ft.QuadPart);
+        out = cdc::mft_filetime_to_unix(ft.QuadPart);
     }
     free(w);
     return out;
