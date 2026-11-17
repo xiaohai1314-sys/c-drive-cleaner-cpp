@@ -228,16 +228,16 @@ void maybe_migrate_legacy(sqlite3 *db) {
 // 把 src 里 has_* 为真的档位并入 dst；返回是否有变化。
 bool merge_digests(DigestSet &dst, const DigestSet &src) {
     bool changed = false;
-    auto merge32 = [&](int &dst_has, Digest &dst_d, int src_has, const Digest &src_d) {
+    auto merge32 = [&](bool &dst_has, Digest &dst_d, bool src_has, const Digest &src_d) {
         if (src_has && (!dst_has || std::memcmp(dst_d.bytes, src_d.bytes, 32) != 0)) {
-            dst_has = 1;
+            dst_has = true;
             dst_d = src_d;
             changed = true;
         }
     };
-    auto merge64 = [&](int &dst_has, uint64_t &dst_v, int src_has, uint64_t src_v) {
+    auto merge64 = [&](bool &dst_has, uint64_t &dst_v, bool src_has, uint64_t src_v) {
         if (src_has && (!dst_has || dst_v != src_v)) {
-            dst_has = 1;
+            dst_has = true;
             dst_v = src_v;
             changed = true;
         }

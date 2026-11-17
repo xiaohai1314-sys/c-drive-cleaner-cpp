@@ -115,13 +115,13 @@ int cdc_run_index_summary(int quiet, int rebuild, char *summary, size_t cap);
  * Behind 跑一次增量（仅增量，不回填；do_hash=1 时补算摘要）。
  * 返回 1=新鲜（serial_out 已填），0=不新鲜（serial_out 填卷序列号，
  * 卷打不开时填 0）。 */
-int cdc_index_scope_fresh(cdc_fileindex_t *idx, const char *drive, int do_hash,
+int cdc_index_scope_fresh(cdc::FileIndex *idx, const char *drive, int do_hash,
                           uint64_t *serial_out);
 
 /* 只读新鲜度（Rust freshness_from_state；index_status 用，不触发同步）。
  * state_out 填 fresh | behind | stale | missing | unavailable 之一；
  * serial_out 填卷序列号（卷打不开时填 0）。返回 0。 */
-int cdc_index_freshness(cdc_fileindex_t *idx, const char *drive,
+int cdc_index_freshness(cdc::FileIndex *idx, const char *drive,
                         uint64_t *serial_out, char *state_out, size_t cap);
 
 #ifdef __cplusplus

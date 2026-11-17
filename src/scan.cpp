@@ -311,7 +311,7 @@ struct DupCandidate {
     DiskKey disk;
     bool has_file_id = false;
     FileId file_id;
-    cdc_digest_set_t digests{};
+    DigestSet digests{};
     bool has_probe = false;
     uint64_t probe_xxh = 0;  // 探针 XXH3，只放内存，不落库
     bool dirty_head_xxh = false, dirty_sample_xxh = false, dirty_strong_xxh = false,
@@ -400,21 +400,21 @@ void flush_candidate_hashes(HashCache *cache, const CandVec &items, uint64_t now
             continue;
         // 只写 xxh 子字段 + full：旧版 BLAKE3 的 head/sample/strong 不再由管线
         // 产生，不写（缓存里已有的旧值靠 COALESCE 保留）。
-        cdc_digest_set_t sub{};
+        DigestSet sub{};
         if (c.dirty_head_xxh) {
-            sub.has_head_xxh = 1;
+            sub.has_head_xxh = true;
             sub.head_xxh = c.digests.head_xxh;
         }
         if (c.dirty_sample_xxh) {
-            sub.has_sample_xxh = 1;
+            sub.has_sample_xxh = true;
             sub.sample_xxh = c.digests.sample_xxh;
         }
         if (c.dirty_strong_xxh) {
-            sub.has_strong_xxh = 1;
+            sub.has_strong_xxh = true;
             sub.strong_xxh = c.digests.strong_xxh;
         }
         if (c.dirty_full) {
-            sub.has_full = 1;
+            sub.has_full = true;
             sub.full = c.digests.full;
         }
         cache->remember(c.path, c.size, c.mtime, sub, now);
@@ -425,13 +425,13 @@ void flush_candidate_hashes(HashCache *cache, const CandVec &items, uint64_t now
 // full 是 BLAKE3，不能从 xxHash 派生，留给阶段 3 再算。
 void set_head(DupCandidate &c, const uint8_t digest[32]) {
     c.digests.head_xxh = xxh_from_digest32(digest);
-    c.digests.has_head_xxh = 1;
+    c.digests.has_head_xxh = true;
     c.dirty_head_xxh = true;
     if (c.size <= kScanHeadChunk) {
         c.digests.sample_xxh = c.digests.head_xxh;
-        c.digests.has_sample_xxh = 1;
+        c.digests.has_sample_xxh = true;
         c.digests.strong_xxh = c.digests.head_xxh;
-        c.digests.has_strong_xxh = 1;
+        c.digests.has_strong_xxh = true;
         c.dirty_sample_xxh = true;
         c.dirty_strong_xxh = true;
     }
@@ -464,9 +464,9 @@ void stage_strong_work(DupCandidate &cand, const ScanOpts &opts) {
                                          strong, full) == 0) {
             cand.adopt_file_id(strong);
             cand.digests.strong_xxh = xxh_from_digest32(strong.digest);
-            cand.digests.has_strong_xxh = 1;
+            cand.digests.has_strong_xxh = true;
             std::memcpy(cand.digests.full.bytes, full, 32);
-            cand.digests.has_full = 1;
+            cand.digests.has_full = true;
             cand.dirty_strong_xxh = true;
             cand.dirty_full = true;
         }
@@ -476,7 +476,7 @@ void stage_strong_work(DupCandidate &cand, const ScanOpts &opts) {
             0) {
             cand.adopt_file_id(h);
             cand.digests.strong_xxh = xxh_from_digest32(h.digest);
-            cand.digests.has_strong_xxh = 1;
+            cand.digests.has_strong_xxh = true;
             cand.dirty_strong_xxh = true;
             // 注意：strong 是 XXH3，full 是 BLAKE3，不能把 strong 抄给 full；
             // 小文件的 full 在 fast 模式下就缺着，下次常规扫描再补。
@@ -496,9 +496,9 @@ void stage_sample_work(DupCandidate &cand, const ScanOpts &opts) {
                                          sample, full) == 0) {
             cand.adopt_file_id(sample);
             cand.digests.sample_xxh = xxh_from_digest32(sample.digest);
-            cand.digests.has_sample_xxh = 1;
+            cand.digests.has_sample_xxh = true;
             std::memcpy(cand.digests.full.bytes, full, 32);
-            cand.digests.has_full = 1;
+            cand.digests.has_full = true;
             cand.dirty_sample_xxh = true;
             cand.dirty_full = true;
         }
@@ -508,7 +508,7 @@ void stage_sample_work(DupCandidate &cand, const ScanOpts &opts) {
             0) {
             cand.adopt_file_id(h);
             cand.digests.sample_xxh = xxh_from_digest32(h.digest);
-            cand.digests.has_sample_xxh = 1;
+            cand.digests.has_sample_xxh = true;
             cand.dirty_sample_xxh = true;
             // 注意：sample 是 XXH3，full 是 BLAKE3；小文件的 full 留给阶段 3。
         }
@@ -536,7 +536,7 @@ void stage_full_work(DupCandidate &cand, const ScanOpts &opts) {
     if (full_hash_by_frn(cand.path.c_str(), cand.frn, h, &opts) == 0) {
         cand.adopt_file_id(h);
         std::memcpy(cand.digests.full.bytes, h.digest, 32);
-        cand.digests.has_full = 1;
+        cand.digests.has_full = true;
         cand.dirty_full = true;
     }
     call_tick(opts);
@@ -936,7 +936,7 @@ int full_hash_file(const char *path, uint64_t frn, uint8_t digest[32]) {
 // ---------------- 哈希管线入口（对照 main.rs 的 hash_index_groups） ----------------
 
 int scan_hash_groups(std::span<const ScanInput> inputs, HashCache *cache, uint64_t now,
-                     std::vector<cdc_digest_update_t> &out_updates) {
+                     std::vector<DigestUpdate> &out_updates) {
     out_updates.clear();
     if (inputs.empty()) return 0;
     ScanOpts opts;  // fast = false, trace = false
@@ -957,17 +957,17 @@ int scan_hash_groups(std::span<const ScanInput> inputs, HashCache *cache, uint64
         if (cache) {
             if (std::optional<DigestSet> hit = cache->entry_for(in.path, in.size, in.mtime)) {
                 const DigestSet &ce = *hit;
-                cdc_digest_set_t &d = c.digests;
-                if (!d.has_head && ce.has_head) d.has_head = 1, d.head = ce.head;
-                if (!d.has_sample && ce.has_sample) d.has_sample = 1, d.sample = ce.sample;
-                if (!d.has_strong && ce.has_strong) d.has_strong = 1, d.strong = ce.strong;
+                DigestSet &d = c.digests;
+                if (!d.has_head && ce.has_head) d.has_head = true, d.head = ce.head;
+                if (!d.has_sample && ce.has_sample) d.has_sample = true, d.sample = ce.sample;
+                if (!d.has_strong && ce.has_strong) d.has_strong = true, d.strong = ce.strong;
                 // 采样层只看 xxh 字段（旧版 BLAKE3 的三档只透传、不用于跳过）。
-                if (!d.has_head_xxh && ce.has_head_xxh) d.has_head_xxh = 1, d.head_xxh = ce.head_xxh;
+                if (!d.has_head_xxh && ce.has_head_xxh) d.has_head_xxh = true, d.head_xxh = ce.head_xxh;
                 if (!d.has_sample_xxh && ce.has_sample_xxh)
-                    d.has_sample_xxh = 1, d.sample_xxh = ce.sample_xxh;
+                    d.has_sample_xxh = true, d.sample_xxh = ce.sample_xxh;
                 if (!d.has_strong_xxh && ce.has_strong_xxh)
-                    d.has_strong_xxh = 1, d.strong_xxh = ce.strong_xxh;
-                if (!d.has_full && ce.has_full) d.has_full = 1, d.full = ce.full;
+                    d.has_strong_xxh = true, d.strong_xxh = ce.strong_xxh;
+                if (!d.has_full && ce.has_full) d.has_full = true, d.full = ce.full;
             }
         }
         cands.push_back(std::move(c));
@@ -982,7 +982,7 @@ int scan_hash_groups(std::span<const ScanInput> inputs, HashCache *cache, uint64
     for (const CandVec *lane : {&ready, &final_items, &eliminated}) {
         for (const DupCandidate &c : *lane) {
             if (!cand_any_digest(c)) continue;
-            cdc_digest_update_t u{};
+            DigestUpdate u{};
             u.volume_serial = 0;  // 调用方按卷填（见 scan.h 注释）
             u.frn = c.frn;
             u.size = c.size;

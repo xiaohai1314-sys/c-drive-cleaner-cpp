@@ -17,7 +17,7 @@
 #include <string>
 #include <vector>
 
-#include "fileindex.h"  // cdc_digest_set_t / cdc_digest_update_t
+#include "fileindex.h"  // DigestSet / DigestUpdate
 #include "hashcache.h"  // HashCache
 #include "util.h"       // FunctionRef
 
@@ -65,7 +65,7 @@ struct ScanInput {
     uint64_t size = 0;
     uint64_t mtime = 0;
     uint64_t frn = 0;
-    cdc_digest_set_t digests{};
+    DigestSet digests{};
 };
 
 // 哈希管线：把 inputs 按 size 分组，只有同 size ≥2 的组才进分阶段哈希
@@ -75,7 +75,7 @@ struct ScanInput {
 // 整体失败。注意：updates 的 volume_serial 填 0——调用方在
 // set_digests_batch 之前必须按卷填好。
 int scan_hash_groups(std::span<const ScanInput> inputs, HashCache *cache, uint64_t now,
-                     std::vector<cdc_digest_update_t> &out_updates);
+                     std::vector<DigestUpdate> &out_updates);
 
 // 大文件：按最低档 2MB 枚举（keep 过滤用文件名算分档阈值），再排除系统文件名、
 // 复核阈值，mtime 为 0 时读文件属性补齐；结果按 size 降序。返回 0 成功。

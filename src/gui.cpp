@@ -33,6 +33,10 @@
 #include <string.h>
 #include <time.h>
 
+#include <memory>
+#include <span>
+#include <vector>
+
 #include "cJSON.h"
 #include "blake3.h"
 #include "logs.h"   /* cdc_write_log / cdc_append_line / cdc_cache_dir */
@@ -2104,16 +2108,16 @@ static int gui_cmp_flat_dup_row(const void *a, const void *b) {
 /* 索引查重复（Rust query_dups_from_index）：返回 cJSON 数组或 NULL（回落）。 */
 static cJSON *gui_query_dups_from_index(char **roots, size_t nroots,
                                         uint64_t min_size, int fast) {
-    if (min_size < CDC_INDEX_MIN_SIZE) return NULL;
-    cdc_err_t err;
-    cdc_fileindex_t *idx = cdc_fileindex_open_default(&err);
+    if (min_size < cdc::kIndexMinSize) return NULL;
+    cdc::Error err;
+    std::unique_ptr<cdc::FileIndex> idx_owner = cdc::FileIndex::open_default(&err);
+    cdc::FileIndex *idx = idx_owner.get();
     if (!idx) return NULL;
     uint64_t *serials = (uint64_t *)malloc(nroots * sizeof(uint64_t));
     char **prefixes = (char **)calloc(nroots, sizeof(char *));
     if (!serials || !prefixes) {
         free(serials);
         free(prefixes);
-        cdc_fileindex_close(idx);
         return NULL;
     }
     size_t nscopes = 0;
@@ -2124,7 +2128,6 @@ static cJSON *gui_query_dups_from_index(char **roots, size_t nroots,
             for (size_t j = 0; j < nscopes; j++) free(prefixes[j]);
             free(prefixes);
             free(serials);
-            cdc_fileindex_close(idx);
             return NULL;
         }
         uint64_t serial = 0;
@@ -2133,7 +2136,6 @@ static cJSON *gui_query_dups_from_index(char **roots, size_t nroots,
             for (size_t j = 0; j < nscopes; j++) free(prefixes[j]);
             free(prefixes);
             free(serials);
-            cdc_fileindex_close(idx);
             return NULL;
         }
         serials[nscopes] = serial;
@@ -2143,14 +2145,13 @@ static cJSON *gui_query_dups_from_index(char **roots, size_t nroots,
     if (nscopes == 0) {
         free(prefixes);
         free(serials);
-        cdc_fileindex_close(idx);
         return NULL;
     }
-    size_t nrows = 0;
-    cdc_index_dup_row_t *rows =
-        cdc_fileindex_query_dup_rows(idx, serials, nscopes, min_size, &nrows);
+    std::vector<cdc::IndexDupRow> rows =
+        idx->query_dup_rows(std::span<const uint64_t>(serials, nscopes), min_size);
+    size_t nrows = rows.size();
     cJSON *result = NULL;
-    if (rows && nrows > 0) {
+    if (nrows > 0) {
         /* 过滤系统文件 + 作用域前缀。 */
         size_t *keep = (size_t *)malloc(nrows * sizeof(size_t));
         size_t nkept = 0;
@@ -2161,7 +2162,7 @@ static cJSON *gui_query_dups_from_index(char **roots, size_t nroots,
                 for (size_t s = 0; s < nscopes; s++) {
                     if (serials[s] != rows[i].volume_serial) continue;
                     if (!prefixes[s] ||
-                        cdc_gui_path_under_dir(rows[i].path, prefixes[s])) {
+                        cdc_gui_path_under_dir(rows[i].path.c_str(), prefixes[s])) {
                         in_scope = 1;
                         break;
                     }
@@ -2176,13 +2177,13 @@ static cJSON *gui_query_dups_from_index(char **roots, size_t nroots,
             flat = (gui_flat_dup_row_t *)malloc(nkept * sizeof(gui_flat_dup_row_t));
             if (flat) {
                 for (size_t i = 0; i < nkept; i++) {
-                    cdc_index_dup_row_t *r = &rows[keep[i]];
+                    const cdc::IndexDupRow *r = &rows[keep[i]];
                     flat[nflat].size = r->size;
                     flat[nflat].has_digest =
                         fast ? r->digests.has_strong : r->digests.has_full;
                     cdc::digest_to_hex(fast ? r->digests.strong : r->digests.full,
                                        flat[nflat].hex);
-                    flat[nflat].path = r->path;
+                    flat[nflat].path = r->path.c_str();
                     flat[nflat].mtime = r->mtime;
                     nflat++;
                 }
@@ -2266,22 +2267,20 @@ static cJSON *gui_query_dups_from_index(char **roots, size_t nroots,
         free(flat);
         free(keep);
     }
-    if (rows) cdc_index_dup_rows_free(rows, nrows);
     for (size_t j = 0; j < nscopes; j++) free(prefixes[j]);
     free(prefixes);
     free(serials);
-    cdc_fileindex_close(idx);
     return result;
 }
 
 /* 索引查大文件（Rust query_big_from_index）：返回 cJSON 数组或 NULL（回落）。 */
 static cJSON *gui_query_big_from_index(char **drives, size_t ndrives) {
-    cdc_err_t err;
-    cdc_fileindex_t *idx = cdc_fileindex_open_default(&err);
+    cdc::Error err;
+    std::unique_ptr<cdc::FileIndex> idx_owner = cdc::FileIndex::open_default(&err);
+    cdc::FileIndex *idx = idx_owner.get();
     if (!idx) return NULL;
     uint64_t *serials = (uint64_t *)malloc((ndrives ? ndrives : 1) * sizeof(uint64_t));
     if (!serials) {
-        cdc_fileindex_close(idx);
         return NULL;
     }
     size_t nserials = 0;
@@ -2289,22 +2288,20 @@ static cJSON *gui_query_big_from_index(char **drives, size_t ndrives) {
         uint64_t serial = 0;
         if (!cdc_index_scope_fresh(idx, drives[i], 0, &serial) || serial == 0) {
             free(serials);
-            cdc_fileindex_close(idx);
             return NULL;
         }
         serials[nserials++] = serial;
     }
     if (nserials == 0) {
         free(serials);
-        cdc_fileindex_close(idx);
         return NULL;
     }
-    size_t nrows = 0;
-    cdc_index_big_row_t *rows =
-        cdc_fileindex_query_big_rows(idx, serials, nserials, &nrows);
+    std::vector<cdc::IndexBigRow> rows =
+        idx->query_big_rows(std::span<const uint64_t>(serials, nserials));
+    size_t nrows = rows.size();
     free(serials);
     cJSON *arr = NULL;
-    if (rows) {
+    if (nrows > 0) {
         arr = cJSON_CreateArray();
         if (arr) {
             for (size_t i = 0; i < nrows; i++) {
@@ -2313,15 +2310,13 @@ static cJSON *gui_query_big_from_index(char **drives, size_t ndrives) {
                     continue;
                 cJSON *o = cJSON_CreateObject();
                 if (!o) continue;
-                cJSON_AddStringToObject(o, "path", rows[i].path);
+                cJSON_AddStringToObject(o, "path", rows[i].path.c_str());
                 cJSON_AddNumberToObject(o, "size", (double)rows[i].size);
                 cJSON_AddNumberToObject(o, "mtime", (double)rows[i].mtime);
                 cJSON_AddItemToArray(arr, o);
             }
         }
-        cdc_index_big_rows_free(rows, nrows);
     }
-    cdc_fileindex_close(idx);
     return arr;
 }
 
@@ -2812,10 +2807,10 @@ static int h_delete_dups(const char *args_json, char **out_json,
                                    sizeof(char *));
     for (size_t i = 0; i < npaths_to_hash; i++) {
         const char *p = i < nkeepers ? keepers[i] : pending[i - nkeepers].path;
-        uint8_t digest[32];
-        if (cdc::full_hash_file(p, 0, digest) == 0) {
+        cdc::Digest digest;
+        if (cdc::full_hash_file(p, 0, digest.bytes) == 0) {
             char hex[65];
-            cdc::digest_to_hex(*(const cdc_digest_t *)digest, hex);
+            cdc::digest_to_hex(digest, hex);
             hashed[i] = gui_strdup(hex);
         }
         cdc_task_add_done("dup_delete", 1);
@@ -3035,12 +3030,12 @@ static int h_index_status(const char *args_json, char **out_json,
     (void)out_error;
     size_t ndrives = 0;
     char **drives = gui_fixed_drives_list(&ndrives);
-    cdc_err_t err;
-    cdc_fileindex_t *idx = cdc_fileindex_open_default(&err);
+    cdc::Error err;
+    std::unique_ptr<cdc::FileIndex> idx_owner = cdc::FileIndex::open_default(&err);
+    cdc::FileIndex *idx = idx_owner.get();
     cJSON *volumes = cJSON_CreateArray();
     if (!volumes) {
         gui_free_str_array(drives, ndrives);
-        if (idx) cdc_fileindex_close(idx);
         return gui_fail(out_error, "内存不足");
     }
     for (size_t i = 0; i < ndrives; i++) {
@@ -3053,11 +3048,10 @@ static int h_index_status(const char *args_json, char **out_json,
             uint64_t serial = 0;
             cdc_index_freshness(idx, drives[i], &serial, state, sizeof(state));
             if (serial != 0) {
-                cdc_fileindex_volume_counts(idx, serial, &files, &with_full);
-                uint64_t at = 0;
-                if (cdc_fileindex_usn_state_updated_at(idx, serial, &at) == 1) {
-                    updated_at = at;
-                }
+                cdc::IndexCounts c = idx->volume_counts(serial);
+                files = c.total;
+                with_full = c.with_full;
+                updated_at = idx->usn_state_updated_at(serial).value_or(0);
             }
         }
         cJSON_AddStringToObject(v, "state", state);
@@ -3066,7 +3060,6 @@ static int h_index_status(const char *args_json, char **out_json,
         cJSON_AddNumberToObject(v, "updated_at", (double)updated_at);
         cJSON_AddItemToArray(volumes, v);
     }
-    if (idx) cdc_fileindex_close(idx);
     gui_free_str_array(drives, ndrives);
     cJSON *o = cJSON_CreateObject();
     if (!o) {
