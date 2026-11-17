@@ -392,19 +392,17 @@ static void test_system_pure(void) {
 /* ---------------- privacy 扫描结构（空环境） ---------------- */
 
 static void test_privacy_scan_empty(void) {
-    cdc_privacy_item_t *items = NULL;
-    size_t n = 0;
-    cdc_err_t e;
-    CHECK(cdc_privacy_scan(&items, &n, &e) == CDC_OK, "privacy scan rc=%d (%s)", e.code, e.message);
+    std::vector<cdc::PrivacyItem> items = cdc::privacy_scan();
+    size_t n = items.size();
+    CHECK(items.size() == n, "privacy scan returns items");
     CHECK(n == 9, "privacy scan empty env -> 9 items, got %zu", n);
     const char *want_ids[9] = { "risk_file", "risk_money", "risk_shop",
                                 "risk_medical", "cookies", "reg_file",
                                 "reg_usb", "software", "media" };
     for (size_t i = 0; i < n && i < 9; i++) {
-        CHECK(strcmp(items[i].id, want_ids[i]) == 0,
-              "privacy item %zu id %s (got %s)", i, want_ids[i], items[i].id);
+        CHECK(items[i].id == want_ids[i],
+              "privacy item %zu id %s (got %s)", i, want_ids[i], items[i].id.c_str());
     }
-    cdc_privacy_items_free(items, n);
 }
 
 /* ---------------- shred / recycle / process 的 Linux 降级 ---------------- */

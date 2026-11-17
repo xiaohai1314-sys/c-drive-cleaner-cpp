@@ -34,6 +34,7 @@
 #include <time.h>
 
 #include <memory>
+#include <string>
 #include <span>
 #include <vector>
 
@@ -1316,6 +1317,13 @@ static cJSON *gui_str_array_json(char **items, size_t n) {
     for (size_t i = 0; i < n; i++) {
         cJSON_AddItemToArray(a, cJSON_CreateString(items[i] ? items[i] : ""));
     }
+    return a;
+}
+
+static cJSON *gui_str_array_json(const std::vector<std::string> &items) {
+    cJSON *a = cJSON_CreateArray();
+    if (!a) return NULL;
+    for (const std::string &it : items) cJSON_AddItemToArray(a, cJSON_CreateString(it.c_str()));
     return a;
 }
 
@@ -3568,33 +3576,23 @@ static int h_privacy_scan(const char *args_json, char **out_json,
     char *begin_err = NULL;
     cdc_task_begin("privacy_scan", "隐私清理扫描", 0, 0, &begin_err);
     free(begin_err);
-    cdc_err_t err;
-    cdc_privacy_item_t *items = NULL;
-    size_t n = 0;
-    if (cdc_privacy_scan(&items, &n, &err) != CDC_OK) {
-        cdc_task_finish("privacy_scan", "failed",
-                        err.message[0] ? err.message : "隐私扫描失败");
-        return gui_fail(out_error, "%s",
-                        err.message[0] ? err.message : "隐私扫描失败");
-    }
+    std::vector<cdc::PrivacyItem> items = cdc::privacy_scan();
     cJSON *arr = cJSON_CreateArray();
     if (arr) {
-        for (size_t i = 0; i < n; i++) {
+        for (const cdc::PrivacyItem &it : items) {
             cJSON *o = cJSON_CreateObject();
             if (!o) continue;
-            cJSON_AddStringToObject(o, "id", items[i].id);
-            cJSON_AddStringToObject(o, "section", items[i].section);
-            cJSON_AddStringToObject(o, "name", items[i].name);
-            cJSON_AddNumberToObject(o, "count", (double)items[i].count);
-            cJSON_AddBoolToObject(o, "count_available", items[i].count_available);
-            cJSON_AddItemToObject(o, "files",
-                                  gui_str_array_json(items[i].files, items[i].nfiles));
-            cJSON_AddStringToObject(o, "action", items[i].action);
-            cJSON_AddStringToObject(o, "note", items[i].note);
+            cJSON_AddStringToObject(o, "id", it.id.c_str());
+            cJSON_AddStringToObject(o, "section", it.section.c_str());
+            cJSON_AddStringToObject(o, "name", it.name.c_str());
+            cJSON_AddNumberToObject(o, "count", (double)it.count);
+            cJSON_AddBoolToObject(o, "count_available", it.count_available);
+            cJSON_AddItemToObject(o, "files", gui_str_array_json(it.files));
+            cJSON_AddStringToObject(o, "action", it.action.c_str());
+            cJSON_AddStringToObject(o, "note", it.note.c_str());
             cJSON_AddItemToArray(arr, o);
         }
     }
-    cdc_privacy_items_free(items, n);
     cdc_task_finish("privacy_scan", "ok", "隐私扫描完成");
     if (!arr) return gui_fail(out_error, "内存不足");
     return gui_ok_json(out_json, arr);
@@ -3619,16 +3617,8 @@ static int h_privacy_clean(const char *args_json, char **out_json,
         gui_free_str_array(ids, nids);
         return r;
     }
-    cdc_err_t err;
-    cdc_privacy_report_t report;
-    memset(&report, 0, sizeof(report));
-    if (cdc_privacy_clean((const char **)ids, nids, &report, &err) != CDC_OK) {
-        cdc_task_finish("privacy", "failed",
-                        err.message[0] ? err.message : "隐私清理失败");
-        gui_free_str_array(ids, nids);
-        return gui_fail(out_error, "%s",
-                        err.message[0] ? err.message : "隐私清理失败");
-    }
+    cdc::PrivacyReport report =
+        cdc::privacy_clean(std::span<const char *const>(ids, nids));
     gui_free_str_array(ids, nids);
     {
         char summary[128];
@@ -3637,16 +3627,11 @@ static int h_privacy_clean(const char *args_json, char **out_json,
         cdc_task_finish("privacy", "ok", summary);
     }
     cJSON *o = cJSON_CreateObject();
-    if (!o) {
-        cdc_privacy_report_free(&report);
-        return gui_fail(out_error, "内存不足");
-    }
+    if (!o) return gui_fail(out_error, "内存不足");
     cJSON_AddNumberToObject(o, "files", (double)report.files);
     cJSON_AddNumberToObject(o, "sql", (double)report.sql);
     cJSON_AddNumberToObject(o, "registry", (double)report.registry);
-    cJSON_AddItemToObject(o, "failed",
-                          gui_str_array_json(report.failed, report.nfailed));
-    cdc_privacy_report_free(&report);
+    cJSON_AddItemToObject(o, "failed", gui_str_array_json(report.failed));
     return gui_ok_json(out_json, o);
 }
 
@@ -3996,7 +3981,7 @@ int cdc_gui_register_commands(void) {
     hooks.invalidate_dup_cache = gui_hook_invalidate;
     hooks.ctx = NULL;
     cdc_shred_set_hooks(&hooks);
-    cdc_privacy_set_hooks(&hooks);
+    cdc::privacy_set_hooks(&hooks);
     cdc_system_set_hooks(&hooks);
     cdc_im_set_hooks(&hooks);
     size_t n = sizeof(kGuiCommands) / sizeof(kGuiCommands[0]);
