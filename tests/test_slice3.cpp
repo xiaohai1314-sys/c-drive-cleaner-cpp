@@ -536,8 +536,10 @@ int main(void) {
     set_env("WINDIR", "C:\\Windows");
     set_env("SystemDrive", "C:");
     set_env("ProgramData", "C:\\ProgramData");
+#ifndef _WIN32
     set_env("TEMP", "C:\\Users\\u\\AppData\\Local\\Temp");
     set_env("TMP", "C:\\Users\\u\\AppData\\Local\\Temp");
+#endif
     char tmpapp[1024];
 #ifdef _WIN32
     if (!make_temp_dir(tmpapp, sizeof(tmpapp), L"cda")) {
