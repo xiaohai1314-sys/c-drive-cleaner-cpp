@@ -39,6 +39,23 @@ static int cancelled(void) {
     return g_hooks.cancel && g_hooks.cancel(g_hooks.ctx, "im_clean");
 }
 
+/* Reentrant tokenizer with strtok_r semantics, available on MSVC and POSIX. */
+static char *im_next_token(char *input, const char *delimiters, char **state) {
+    if (!state || !delimiters) return NULL;
+    char *cursor = input ? input : *state;
+    if (!cursor) return NULL;
+    while (*cursor && strchr(delimiters, *cursor)) cursor++;
+    if (!*cursor) {
+        *state = cursor;
+        return NULL;
+    }
+    char *token = cursor;
+    while (*cursor && !strchr(delimiters, *cursor)) cursor++;
+    if (*cursor) *cursor++ = '\0';
+    *state = cursor;
+    return token;
+}
+
 /* ---------------- 扩展名表（与 Rust 版逐字一致） ---------------- */
 
 static const char *VIDEO_EXT[] = {
@@ -207,8 +224,8 @@ static char *wechat_registry_path_value(void) {
     }
     char *found = NULL;
     char *save = NULL;
-    for (char *line = strtok_r(so, "\n", &save); line;
-         line = strtok_r(NULL, "\n", &save)) {
+    for (char *line = im_next_token(so, "\n", &save); line;
+         line = im_next_token(NULL, "\n", &save)) {
         /* 去行尾 \r。 */
         size_t n = strlen(line);
         while (n > 0 && (line[n - 1] == '\r' || line[n - 1] == '\n')) line[--n] = '\0';
@@ -322,8 +339,8 @@ static char *wechat_ini_path_value(void) {
     if (!text) return NULL;
     char *found = NULL;
     char *save = NULL;
-    for (char *line = strtok_r(text, "\n", &save); line;
-         line = strtok_r(NULL, "\n", &save)) {
+    for (char *line = im_next_token(text, "\n", &save); line;
+         line = im_next_token(NULL, "\n", &save)) {
         size_t n = strlen(line);
         while (n > 0 && (line[n - 1] == '\r' || line[n - 1] == '\n')) line[--n] = '\0';
         char *eq = strchr(line, '=');
@@ -571,8 +588,8 @@ static int parts_of(const char *path, char ***out, size_t *out_n) {
         return CDC_ERR_NOMEM;
     }
     char *save = NULL;
-    for (char *tok = strtok_r(lower, "\\", &save); tok;
-         tok = strtok_r(NULL, "\\", &save)) {
+    for (char *tok = im_next_token(lower, "\\", &save); tok;
+         tok = im_next_token(NULL, "\\", &save)) {
         if (tok[0] == '\0') continue;
         char *dup = strdup(tok);
         if (dup && cdc_vec_push(&parts, &dup) != CDC_OK) free(dup);

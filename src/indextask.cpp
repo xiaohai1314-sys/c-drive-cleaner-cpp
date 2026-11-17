@@ -18,8 +18,8 @@
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
 #endif
-#include <sddl.h>
 #include <windows.h>
+#include <sddl.h>
 #else
 #include <unistd.h>
 #endif

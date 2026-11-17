@@ -103,6 +103,14 @@ void test_non_windows_contract() {
 #endif
 }
 
+void test_windows_current_user_sid() {
+#ifdef _WIN32
+    char *sid = cdc_indextask_current_user_sid();
+    CHECK(sid && std::strncmp(sid, "S-", 2) == 0, "current user SID string");
+    std::free(sid);
+#endif
+}
+
 } // namespace
 
 int main() {
@@ -110,6 +118,7 @@ int main() {
     test_dates();
     test_utf16_roundtrip();
     test_non_windows_contract();
+    test_windows_current_user_sid();
     std::printf("test_indextask: %d checks, %d failures\n", cdc_test::checks, cdc_test::failures);
     return cdc_test::failures == 0 ? 0 : 1;
 }

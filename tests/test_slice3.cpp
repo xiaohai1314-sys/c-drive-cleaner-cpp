@@ -229,6 +229,8 @@ static void test_im_classify(void) {
                    root, "image", "");
     check_classify("C:\\Users\\u\\Documents\\WeChat Files\\wxid\\FileStorage\\Video\\2025-09\\0483e1f2.mp4",
                    root, "video", "");
+    check_classify("C:/Users/u/Documents/WeChat Files//wxid\\\\FileStorage/Video//2025-09/clip.mp4",
+                   root, "video", "");
     /* Rust: skips_databases_and_config */
     check_classify("C:\\Users\\u\\Documents\\WeChat Files\\wxid\\Msg\\a.db", root, NULL, NULL);
     check_classify("C:\\Users\\u\\Documents\\WeChat Files\\wxid\\db_storage\\a.dat", root, NULL, NULL);
