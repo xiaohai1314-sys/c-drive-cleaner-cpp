@@ -174,7 +174,7 @@ void test_err() {
               err_str(kErrUtf8) != nullptr && err_str(kErrWin32) != nullptr,
           "err str known codes");
     CHECK(std::strcmp(err_str(999), "unknown error") == 0, "err str unknown code");
-    CHECK(kOk == 0 && kErrOk == 0, "kOk is 0");
+    static_assert(kOk == 0 && kErrOk == 0, "kOk and kErrOk are zero");
     e.clear();
     CHECK(e.ok(), "err clear -> ok()");
 }

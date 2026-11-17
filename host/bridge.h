@@ -22,11 +22,11 @@
 
 #pragma once
 
+#include <windows.h>
+
 #ifdef __cplusplus
 #include <WebView2.h>
 #endif
-
-#include <windows.h>
 
 #ifdef __cplusplus
 extern "C" {
