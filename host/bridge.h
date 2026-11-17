@@ -25,6 +25,7 @@
 #include <windows.h>
 
 #ifdef __cplusplus
+#include <objbase.h>
 #include <WebView2.h>
 #endif
 
