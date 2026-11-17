@@ -66,6 +66,10 @@ int cdc_bridge_parse_envelope(const char *json, long *id_out, char *cmd_out,
 #ifdef __cplusplus
 // 以下声明用到 ICoreWebView2*，只在 C++ 下可见。
 
+// 只信任应用自身的 https://cdc.local origin；路径可变，端口/凭据/其他
+// host 一律拒绝。返回 1 表示可信，0 表示不可信。
+int cdc_host_is_trusted_origin(const wchar_t *uri);
+
 // 处理一条前端发来的 postMessage（UTF-16 JSON 文本）。
 // 只是解析信封并把执行排到工作线程；回复异步到达。
 // 返回 0 表示已受理（哪怕命令未知——未知命令会异步回 error）；

@@ -1,62 +1,111 @@
-# c-drive-cleaner-c
+# c-drive-cleaner-cpp
 
-C11 rewrite of [c-drive-cleaner](https://github.com/xiaohai1314-sys/c-drive-cleaner):
-C backend (MFT/USN/index/safety) + Vue 3 frontend via WebView2.
+Windows 磁盘清理工具的 C++20 移植版：原生后端负责 NTFS/MFT、索引、扫描与安全操作，Vue 3 + Vite + TypeScript 前端通过 WebView2 宿主与后端通信。仓库内的自有代码按 C++20 编译；`third_party/` 中的 SQLite、cJSON、BLAKE3、xxHash 和 mimalloc 保持各自的 C 实现。
 
-Rust 版的问题只有一个：编译太慢。搜索速度的瓶颈在磁盘 I/O，换语言省不了；
-省的是编译时间（C 干净编译秒级）和二进制体积（试点 exe 77KB）。
+## 当前状态与限制
 
-## 当前状态：种子
+项目已经不是早期的 C11“种子”：后端、索引任务、扫描/哈希、安全处理、GUI 命令适配层和 WebView2 消息桥均在仓库中。CI 覆盖 Linux 原生测试、Windows/MSVC 编译与关键测试、以及前端构建；这仍不等同于 Windows 真机验收。
 
-- `src/`：已移植的纯逻辑（试点验证通过）——`mft_util.c`（$MFT 解析函数）
-  与 `bigfile.c`（10 档大文件阈值，与 Rust 版逐条一致），见 `docs/pilot.md`
-- `src/mft_raw.c`：Windows 卷探测骨架（`CreateFileW(\\.\C:)` + `FSCTL_GET_NTFS_VOLUME_DATA`）
-- `web/`：Vue 3 + Vite + TypeScript 前端（取自 Rust 版 main 3cf8b26，`npm run build` 通过）
-- `docs/ARCHITECTURE.md`：架构契约——模块划分、API 约定、移植顺序
+当前仍有平台限制：
 
-还没做的事：`parse_record_in_place`（$MFT 完整解析）、USN/快照/索引、
-安全层、删除逻辑、WebView2 宿主与前后端桥接。按 `docs/ARCHITECTURE.md`
-分片做，每片带自测 + Windows 交叉编译过关。
+- Linux CI 不能验证 Windows NTFS 卷读取、USN、管理员权限、回收站/删除效果、计划任务、系统清理命令或 UAC 行为。
+- GUI 只在 Windows 上启动；无参数运行会进入 WebView2 GUI。运行时需要用户机器安装 Edge WebView2 Runtime，并准备前端构建产物。
+- Windows GUI 编译需要真实的 Microsoft WebView2 SDK（NuGet 包 `Microsoft.Web.WebView2`）头文件和 loader 库；仓库中的 `tools/webview2-stub` 只是交叉编译桩头，不能运行 GUI。
+- `pickPaths`、图片缩略图等桥接能力在原生 WebView2 路径下仍有已知限制；长时间扫描/索引由后端继续执行，前端等待可能超时。详见 `docs/bridge-commands.md` 和 `docs/frontend-bridge.md`。
+- Windows CI 使用真实 WebView2 SDK 编译并运行跨平台/Windows 单元测试，但不会启动 GUI，也不能替代实际 NTFS 卷、WebView2 Runtime、管理员权限、UAC 与计划任务的真机验收。
 
-## 切片 1：基础层（已完成）
+## 依赖
 
-- `src/util.{c,h}`：`cdc_buf_t` / `cdc_vec_t` 动态数组、UTF-8/UTF-16
-  转换（`cdc_utf8_to_wide` / `cdc_wide_to_utf8`）、日志 `cdc_log`
-  （写 `%LOCALAPPDATA%\C盘清理工具\logs\`，与 Rust 版同目录）、错误码
-  `cdc_err_t` 与 `#define CDC_OK 0`。自测 `tests/test_util.c`。
-- `third_party/`：SQLite amalgamation 3.54.1、BLAKE3 官方 C 实现 1.8.7、
-  cJSON 1.7.19（版本与来源见 `third_party/README.md`）。
-- 顶层 `CMakeLists.txt` + `cmake/toolchain-mingw64.cmake` +
-  `CMakePresets.json`：MinGW 交叉编译（llvm-mingw）与 MSVC 两条路，
-  C11，`-Wall -Wextra -Werror`（MSVC：`/W4 /WX`，只加给自家目标）。
-- `host/`：由切片 5 提供的原生 COM WebView2 宿主 + 消息桥（`cdc_host`
-  静态库，`bridge.cpp` + `host.cpp`，已交叉编译验证）；顶层
-  `CMakeLists.txt` 只做 `add_subdirectory(host)` 接入，并归一化
-  `CDC_WEBVIEW2_INCLUDE_DIR`（NuGet 包 `Microsoft.Web.WebView2` 的
-  `build/native/include`，以 `-D` 传入）。
+Linux 原生构建需要 GCC/G++、GNU make、pthread/dl 等系统开发环境。前端需要 Node.js 与 npm；锁文件在 `web/package-lock.json`，CI 使用 `npm ci`。
 
-## 构建
+Windows 构建需要 CMake 3.20+ 或仓库 Makefile 所需的 MinGW/llvm-mingw 工具链。GUI 还需要：
+
+- `CDC_WEBVIEW2_INCLUDE_DIR`：NuGet 包中的 `build/native/include`，其中包含 `WebView2.h`；
+- `CDC_WEBVIEW2_LOADER_LIB`：MSVC 使用 `WebView2LoaderStatic.lib`，MinGW 使用对应的 `WebView2Loader.dll.lib`；
+- 运行时安装 Edge WebView2 Runtime。
+
+## 构建与测试
+
+### Linux 原生（推荐的 CI 路径）
 
 ```sh
-# C 后端自测 + 编译（Linux 原生 / Windows 交叉）
 make check
-make time-build
-
-# CMake（与 Makefile 等价，另加第三方库与 host 目标）
-cmake --preset native && cmake --build --preset native && ctest --preset native
-cmake --preset mingw64 && cmake --build --preset mingw64
-# host（WebView2）需要 SDK 头文件：以 -D 传入 NuGet 包的 include 目录
-#   cmake --preset mingw64 -DCDC_WEBVIEW2_INCLUDE_DIR=<.../Microsoft.Web.WebView2/build/native/include>
-# 不传时只报 WARNING，host 编译会在缺 WebView2.h 时失败；本机验证可用
-# 切片 5 的桩头文件 /tmp/cdc-host-test/include（仅供交叉编译验证，不当真 SDK）。
-
-# 前端
-cd web && npm ci && npm run build
 ```
 
-Windows 交叉编译用 llvm-mingw（`x86_64-w64-mingw32-gcc`）。
+这会编译 `build/native/cdc-cpp`、原生测试并运行全部 Makefile 测试，再运行 `cdc-cpp selftest`。测试需要时会通过 `tests/gen_fixtures.sh` 创建临时 fixture。清理构建目录：
+
+```sh
+make clean
+```
+
+等价的 CMake 路径为：
+
+```sh
+cmake --preset native
+cmake --build --preset native
+ctest --preset native
+```
+
+### 前端
+
+```sh
+cd web
+npm ci
+npm run build
+```
+
+`npm run build` 执行 TypeScript 检查后生成 Vite 产物到 `web/dist/`。桥接协议测试还可以在安装依赖后运行：
+
+```sh
+node tests/test_bridge.mjs
+```
+
+### Windows / WebView2
+
+GitHub Actions 会在 Windows 2022/MSVC 上用固定版本的 WebView2 NuGet SDK 编译并运行测试；它不启动 GUI，也不验证用户机器上的 WebView2 Runtime 行为。
+
+仅交叉编译验证（不能运行 GUI）可以使用仓库的桩头：
+
+```sh
+make win WEBVIEW2_INC=tools/webview2-stub
+```
+
+使用真实 SDK 时，将 `WEBVIEW2_INC` 指向 NuGet 包的 `build/native/include`，并提供 `WEBVIEW2_LOADER_LIB`；CMake 则传 `CDC_WEBVIEW2_INCLUDE_DIR` 和 `CDC_WEBVIEW2_LOADER_LIB`。MSVC 示例：
+
+```sh
+cmake -S . -B out/build/msvc -G "Visual Studio 17 2022" -A x64 \
+  -DCDC_WEBVIEW2_INCLUDE_DIR=<path-to-package>/build/native/include \
+  -DCDC_WEBVIEW2_LOADER_LIB=<path-to-package>/build/native/x64/WebView2LoaderStatic.lib
+cmake --build out/build/msvc --config Release
+ctest --test-dir out/build/msvc -C Release
+```
+
+## 使用
+
+构建后，Linux 可运行与平台无关的 CLI 自测和目录大文件扫描：
+
+```sh
+build/native/cdc-cpp selftest
+build/native/cdc-cpp big <directory>
+```
+
+在 Windows 上还可使用：
+
+```text
+cdc-cpp --index [--quiet] [--rebuild]
+cdc-cpp probe <drive-letter>
+```
+
+`--index` 需要相应管理员权限；`probe` 用于 Windows 卷/NTFS 探测。无命令行参数时程序尝试启动 GUI，因此 Linux 构建不会提供可运行的 GUI。GUI 的完整命令和已知桥接差异见 `docs/bridge-commands.md`。
+
+## 项目结构
+
+- `src/`：C++20 后端、CLI、索引、扫描、安全处理和 GUI 命令适配。
+- `host/`：Windows 原生 COM WebView2 宿主与消息桥。
+- `web/`：Vue 3 + Vite + TypeScript 前端。
+- `tests/`：C++ 原生测试、fixture 生成脚本和桥接协议测试。
+- `CMakeLists.txt`、`CMakePresets.json`、`Makefile`：Linux、MinGW 交叉和 MSVC 构建入口。
 
 ## 参考实现
 
-Rust + Tauri 版：`xiaohai1314-sys/c-drive-cleaner`（main 3cf8b26，
-含常驻索引 phases 1–4 的本地合入分支 `index/merge-main-3cf8b26`）。
+Rust + Tauri 版：[xiaohai1314-sys/c-drive-cleaner](https://github.com/xiaohai1314-sys/c-drive-cleaner)。

@@ -21,6 +21,9 @@
 
 #include "util.h" /* cdc_err_t、CDC_OK、错误码 enum */
 
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 /* 任务全名（/tn 用；\CDriveCleaner 文件夹由 /create 隐式创建）。 */
 #define CDC_INDEX_TASK_NAME "\\CDriveCleaner\\Index"
@@ -101,5 +104,9 @@ int cdc_indextask_delete_task(char *msg, size_t cap, cdc_err_t *err);
  * decode_task_xml 两种编码），外加 write_task_xml_utf16 的字节级
  * 回读校验。返回失败断言数，0=全过。 */
 int cdc_indextask_selftest(void);
+
+#ifdef __cplusplus
+} /* extern "C" */
+#endif
 
 #endif

@@ -1,0 +1,89 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux-native:
+    name: Linux native (make check)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install native build tools
+        run: sudo apt-get update && sudo apt-get install --no-install-recommends -y build-essential
+
+      - name: Build and run native tests
+        run: make check
+
+  web-build:
+    name: Web frontend (npm ci and build)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Build frontend
+        run: npm run build
+
+  windows-msvc:
+    name: Windows MSVC (WebView2 SDK)
+    runs-on: windows-2022
+    timeout-minutes: 30
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up .NET for NuGet restore
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Restore pinned WebView2 SDK package
+        shell: pwsh
+        run: |
+          $project = Join-Path $env:RUNNER_TEMP 'WebView2SdkRestore'
+          dotnet new classlib --name WebView2SdkRestore --output $project --framework net8.0
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          dotnet add (Join-Path $project 'WebView2SdkRestore.csproj') package Microsoft.Web.WebView2 --version 1.0.2903.40
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Configure and build with MSVC
+        shell: pwsh
+        run: |
+          $sdk = Join-Path $env:USERPROFILE '.nuget\packages\microsoft.web.webview2\1.0.2903.40\build\native'
+          $include = Join-Path $sdk 'include'
+          $loader = Join-Path $sdk 'x64\WebView2LoaderStatic.lib'
+          if (!(Test-Path $include) -or !(Test-Path $loader)) { throw 'WebView2 NuGet package layout is incomplete.' }
+          cmake -S . -B build/msvc -G 'Visual Studio 17 2022' -A x64 "-DCDC_WEBVIEW2_INCLUDE_DIR=$include" "-DCDC_WEBVIEW2_LOADER_LIB=$loader"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cmake --build build/msvc --config Release --parallel 4
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Run Windows-safe native tests
+        shell: pwsh
+        run: ctest --test-dir build/msvc -C Release --output-on-failure

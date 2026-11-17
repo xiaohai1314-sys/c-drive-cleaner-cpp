@@ -4,8 +4,16 @@
  * 功能返回 CDC_ERR_IO。 */
 #include "system.h"
 
-#include <stdlib.h>
-#include <string.h>
+#include <algorithm>
+#include <array>
+#include <cstddef>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <vector>
 
 #include "cJSON.h"
 #include "im.h"
@@ -13,6 +21,7 @@
 #include "cdc_process.h"
 #include "safety.h"
 #include "timeutil.h"
+#include "raii.h"
 
 #ifdef _WIN32
 #include <windows.h>
@@ -30,7 +39,7 @@ void cdc_system_set_hooks(const cdc_hooks_t *hooks) {
     if (hooks) {
         g_hooks = *hooks;
     } else {
-        memset(&g_hooks, 0, sizeof(g_hooks));
+        g_hooks = {};
     }
 }
 
@@ -52,24 +61,31 @@ static void unit(const char *task, const char *u) {
 
 /* ---------------- 路径辅助（main.rs） ---------------- */
 
-static char *env_or(const char *name, const char *fallback) {
-    char *v = cdc_getenv_utf8(name);
-    if (v && v[0]) return v;
-    free(v);
-    return strdup(fallback);
+static char *dup_cstr(std::string_view value) {
+    char *out = static_cast<char *>(std::malloc(value.size() + 1));
+    if (!out) return nullptr;
+    if (!value.empty()) std::memcpy(out, value.data(), value.size());
+    out[value.size()] = '\0';
+    return out;
+}
+
+static std::string env_or_string(const char *name, std::string_view fallback) {
+    if (std::optional<std::string> value = cdc::getenv_utf8(name);
+        value && !value->empty())
+        return std::move(*value);
+    return std::string(fallback);
+}
+
+static char *env_or(const char *name, std::string_view fallback) {
+    return dup_cstr(env_or_string(name, fallback));
 }
 
 char *cdc_system32_path(const char *name) {
-    char *root = env_or("SystemRoot", "C:\\Windows");
-    size_t n = strlen(root);
-    while (n > 0 && root[n - 1] == '\\') root[--n] = '\0';
-    cdc_buf_t b;
-    cdc_buf_init(&b);
-    cdc_buf_append_str(&b, root);
-    free(root);
-    cdc_buf_append_str(&b, "\\System32\\");
-    cdc_buf_append_str(&b, name);
-    return cdc_buf_take_cstr(&b);
+    std::string root = env_or_string("SystemRoot", "C:\\Windows");
+    while (!root.empty() && root.back() == '\\') root.pop_back();
+    root += "\\System32\\";
+    root += name ? name : "";
+    return dup_cstr(root);
 }
 
 static char *windows_dir(void) {
@@ -81,98 +97,88 @@ static char *programdata_dir(void) {
 }
 
 static char *hiber_path(void) {
-    char *drive = env_or("SystemDrive", "C:");
-    size_t n = strlen(drive);
-    while (n > 0 && drive[n - 1] == '\\') drive[--n] = '\0';
-    cdc_buf_t b;
-    cdc_buf_init(&b);
-    cdc_buf_append_str(&b, drive);
-    free(drive);
-    cdc_buf_append_str(&b, "\\hiberfil.sys");
-    return cdc_buf_take_cstr(&b);
+    std::string drive = env_or_string("SystemDrive", "C:");
+    while (!drive.empty() && drive.back() == '\\') drive.pop_back();
+    drive += "\\hiberfil.sys";
+    return dup_cstr(drive);
 }
 
 static char *path_join_win(const char *a, const char *b) {
-    cdc_buf_t buf;
-    cdc_buf_init(&buf);
-    cdc_buf_append_str(&buf, a);
-    size_t n = strlen(a);
-    while (b[0] == '\\' || b[0] == '/') b++;
-    if (n > 0 && a[n - 1] != '\\' && a[n - 1] != '/')
-        cdc_buf_append_str(&buf, "\\");
-    cdc_buf_append_str(&buf, b);
-    return cdc_buf_take_cstr(&buf);
+    std::string out = a ? a : "";
+    std::string_view suffix = b ? std::string_view(b) : std::string_view();
+    while (!suffix.empty() && (suffix.front() == '\\' || suffix.front() == '/'))
+        suffix.remove_prefix(1);
+    if (!out.empty() && out.back() != '\\' && out.back() != '/') out.push_back('\\');
+    out.append(suffix);
+    return dup_cstr(out);
 }
 
 int cdc_fixed_drives(char ***out, size_t *out_n, cdc_err_t *err) {
-    if (err) cdc_err_init(err);
+    cdc::err_init(err);
     if (!out || !out_n) {
-        if (err) cdc_err_set(err, CDC_ERR_INVALID_ARG, "NULL out param");
-        return CDC_ERR_INVALID_ARG;
+        cdc::err_set(err, cdc::kErrInvalidArg, "NULL out param");
+        return cdc::kErrInvalidArg;
     }
-    *out = NULL;
+    *out = nullptr;
     *out_n = 0;
-    cdc_vec_t drives;
-    if (cdc_vec_init(&drives, sizeof(char *)) != CDC_OK) {
-        if (err) cdc_err_set(err, CDC_ERR_NOMEM, "out of memory");
-        return CDC_ERR_NOMEM;
-    }
+    std::vector<std::string> drives;
 #ifdef _WIN32
     DWORD mask = GetLogicalDrives();
     for (uint32_t i = 0; i < 26; i++) {
         if ((mask & (1u << i)) == 0) continue;
-        char root[4] = { (char)('A' + i), ':', '\\', '\0' };
-        wchar_t *w = cdc_utf8_to_wide(root);
-        if (!w) continue;
-        UINT type = GetDriveTypeW(w);
-        free(w);
-        if (type == DRIVE_FIXED) {
-            char *dup = strdup(root);
-            if (dup && cdc_vec_push(&drives, &dup) != CDC_OK) free(dup);
-        }
+        char root[4] = {static_cast<char>('A' + i), ':', '\\', '\0'};
+        std::optional<std::wstring> wide = cdc::utf8_to_wide(root);
+        if (!wide) continue;
+        if (GetDriveTypeW(wide->c_str()) == DRIVE_FIXED) drives.emplace_back(root);
     }
-#else
-    (void)0;
 #endif
-    if (drives.len == 0) {
-        char *dup = strdup("C:\\");
-        if (dup && cdc_vec_push(&drives, &dup) != CDC_OK) free(dup);
+    if (drives.empty()) drives.emplace_back("C:\\");
+    char **result = static_cast<char **>(std::calloc(drives.size(), sizeof(char *)));
+    if (!result) {
+        cdc::err_set(err, cdc::kErrNoMem, "out of memory");
+        return cdc::kErrNoMem;
     }
-    *out = (char **)drives.data;
-    *out_n = drives.len;
-    drives.data = NULL;
-    drives.len = drives.cap = 0;
-    cdc_vec_free(&drives);
-    return CDC_OK;
+    size_t made = 0;
+    for (; made < drives.size(); made++) {
+        result[made] = dup_cstr(drives[made]);
+        if (!result[made]) break;
+    }
+    if (made != drives.size()) {
+        for (size_t i = 0; i < made; i++) std::free(result[i]);
+        std::free(result);
+        cdc::err_set(err, cdc::kErrNoMem, "out of memory");
+        return cdc::kErrNoMem;
+    }
+    *out = result;
+    *out_n = drives.size();
+    return cdc::kOk;
 }
 
 int cdc_drive_free_space(const char *drive, uint64_t *out_free,
                          uint64_t *out_total, cdc_err_t *err) {
-    if (err) cdc_err_init(err);
+    cdc::err_init(err);
     if (!drive || !out_free || !out_total) {
-        if (err) cdc_err_set(err, CDC_ERR_INVALID_ARG, "NULL param");
-        return CDC_ERR_INVALID_ARG;
+        cdc::err_set(err, cdc::kErrInvalidArg, "NULL param");
+        return cdc::kErrInvalidArg;
     }
 #ifdef _WIN32
-    wchar_t *w = cdc_utf8_to_wide(drive);
-    if (!w) {
-        if (err) cdc_err_set(err, CDC_ERR_UTF8, "invalid UTF-8 drive");
-        return CDC_ERR_UTF8;
+    std::optional<std::wstring> wide = cdc::utf8_to_wide(drive);
+    if (!wide) {
+        cdc::err_set(err, cdc::kErrUtf8, "invalid UTF-8 drive");
+        return cdc::kErrUtf8;
     }
-    ULARGE_INTEGER free_avail, total, total_free;
-    BOOL ok = GetDiskFreeSpaceExW(w, &free_avail, &total, &total_free);
-    free(w);
-    if (!ok) {
-        if (err) cdc_err_set(err, CDC_ERR_IO, "获取磁盘空间失败");
-        return CDC_ERR_IO;
+    ULARGE_INTEGER free_avail{}, total{}, total_free{};
+    if (!GetDiskFreeSpaceExW(wide->c_str(), &free_avail, &total, &total_free)) {
+        cdc::err_set(err, cdc::kErrIo, "获取磁盘空间失败");
+        return cdc::kErrIo;
     }
     *out_free = free_avail.QuadPart;
     *out_total = total.QuadPart;
-    return CDC_OK;
+    return cdc::kOk;
 #else
     (void)drive;
-    if (err) cdc_err_set(err, CDC_ERR_IO, "仅支持 Windows");
-    return CDC_ERR_IO;
+    cdc::err_set(err, cdc::kErrIo, "仅支持 Windows");
+    return cdc::kErrIo;
 #endif
 }
 
@@ -462,16 +468,15 @@ static void system_add_done(void) {
 static uint64_t g_im_move_bytes_done = 0;
 
 /* ASCII 不区分大小写比较（只折叠 A-Z；中文路径不受影响）。 */
-static int ascii_iequal(const char *a, const char *b) {
-    while (*a && *b) {
-        char ca = *a, cb = *b;
+static bool ascii_iequal(std::string_view a, std::string_view b) {
+    if (a.size() != b.size()) return false;
+    for (size_t i = 0; i < a.size(); i++) {
+        char ca = a[i], cb = b[i];
         if (ca >= 'A' && ca <= 'Z') ca = (char)(ca + ('a' - 'A'));
         if (cb >= 'A' && cb <= 'Z') cb = (char)(cb + ('a' - 'A'));
-        if (ca != cb) return 0;
-        a++;
-        b++;
+        if (ca != cb) return false;
     }
-    return *a == *b;
+    return true;
 }
 
 typedef struct {
@@ -479,28 +484,27 @@ typedef struct {
     uint64_t count;
 } size_count_t;
 
-static int size_count_cb(void *ctx, const char *path, int is_dir,
-                         int is_symlink, uint64_t size, uint64_t mtime,
-                         uint32_t attrs) {
-    (void)path;
-    (void)mtime;
-    (void)attrs;
-    if (is_dir || is_symlink) return 0;
-    size_count_t *s = (size_count_t *)ctx;
-    s->size += size;
-    s->count++;
-    return 0;
-}
-
 static size_count_t dir_size_count(const char *dir) {
-    size_count_t s = { 0, 0 };
-    cdc_walk_dir(dir, 1, size_count_cb, &s, NULL);
-    return s;
+    size_count_t result{};
+    if (!dir) return result;
+    cdc::Error ignored;
+    cdc::walk_dir(dir, 1,
+                  [&](const cdc::WalkEntry &entry) -> int {
+                      if (!entry.is_dir && !entry.is_symlink) {
+                          result.size += entry.size;
+                          result.count++;
+                      }
+                      return 0;
+                  },
+                  &ignored);
+    return result;
 }
 
 static char *parent_of(const char *path) {
     /* 去尾分隔符后取最后一个分隔符之前；"C:\" 无父目录。 */
-    size_t n = strlen(path);
+    if (!path) return nullptr;
+    std::string_view text(path);
+    size_t n = text.size();
     while (n > 0 && (path[n - 1] == '\\' || path[n - 1] == '/')) n--;
     if (n == 0) return NULL;
     size_t cut = n;
@@ -510,41 +514,32 @@ static char *parent_of(const char *path) {
     while (plen > 1 && (path[plen - 1] == '\\' || path[plen - 1] == '/'))
         plen--;
     if (plen == 0) return NULL;
-    char *p = (char *)malloc(plen + 1);
-    if (!p) return NULL;
-    memcpy(p, path, plen);
-    p[plen] = '\0';
-    return p;
+    return dup_cstr(text.substr(0, plen));
 }
 
 /* 祖先链上任一组件是重解析点，或某一级元数据读失败（不存在除外），
  * 都视为不安全（Rust path_has_reparse_ancestor 的语义）。 */
 static int path_has_reparse_ancestor(const char *path) {
-    char *cur = strdup(path);
-    if (!cur) return 1;
-    int found = 0;
+    if (!path) return 1;
+    std::string cur(path);
     for (;;) {
-        int is_reparse = 0;
-        cdc_err_t e;
-        int rc = cdc_reparse_point_status(cur, &is_reparse, &e);
-        if (rc == CDC_OK) {
+        bool is_reparse = false;
+        cdc::Error e;
+        int rc = cdc::reparse_point_status(cur, is_reparse, &e);
+        if (rc == cdc::kOk) {
             if (is_reparse) {
-                found = 1;
-                break;
+                return 1;
             }
-        } else if (rc == CDC_ERR_NOT_FOUND) {
+        } else if (rc == cdc::kErrNotFound) {
             /* 不存在：继续向上检查祖先。 */
         } else {
-            found = 1;
-            break;
+            return 1;
         }
-        char *par = parent_of(cur);
-        free(cur);
-        if (!par) break;
-        cur = par;
+        char *par = parent_of(cur.c_str());
+        if (!par) return 0;
+        cur.assign(par);
+        std::free(par);
     }
-    free(cur);
-    return found;
 }
 
 /* 清空目录内容（保留目录本身）：不跟随任何重解析点，逐个文件走

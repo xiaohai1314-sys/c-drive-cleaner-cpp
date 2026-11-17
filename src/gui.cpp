@@ -35,6 +35,9 @@
 
 #include <memory>
 #include <string>
+#include <string_view>
+#include <array>
+#include <algorithm>
 #include <span>
 #include <vector>
 
@@ -82,18 +85,27 @@ static char *gui_strdup(const char *s) {
 static char *gui_strndup(const char *s, size_t n) {
     char *p = (char *)malloc(n + 1);
     if (!p) return NULL;
-    memcpy(p, s, n);
+    if (n != 0) memcpy(p, s, n);
     p[n] = '\0';
     return p;
 }
 
+static std::string gui_copy_truncated(const char *value, size_t cap) {
+    if (!value || cap == 0) return {};
+    std::string result(value);
+    if (result.size() >= cap) result.resize(cap - 1);
+    return result;
+}
+
 /* ASCII 小写（就地；UTF-8 多字节字节原样保留，与 Rust 的 to_lowercase
  * 在 ASCII 标签上的效果一致）。 */
+#ifdef _WIN32
 static void gui_ascii_lower(char *s) {
     for (; *s; s++) {
         if (*s >= 'A' && *s <= 'Z') *s = (char)(*s - 'A' + 'a');
     }
 }
+#endif
 
 /* epoch 毫秒（Rust task.rs 的 now_ms）。 */
 static uint64_t gui_now_ms(void) {
@@ -195,19 +207,11 @@ static int gui_next_number(const char *text, double *out_value, size_t *out_end)
                 end++;
             }
             /* 去掉千分位逗号再转 double（就地过滤，dst 恒不超前 src）。 */
-            char *raw = gui_strndup(text + start, end - start);
-            if (!raw) return 0;
-            {
-                char *dst = raw;
-                for (const char *src = raw; *src; src++) {
-                    if (*src != ',') *dst++ = *src;
-                }
-                *dst = '\0';
-            }
+            std::string raw(text + start, end - start);
+            raw.erase(std::remove(raw.begin(), raw.end(), ','), raw.end());
             char *ep = NULL;
-            double v = strtod(raw, &ep);
-            free(raw);
-            if (ep && ep != raw) {
+            double v = strtod(raw.c_str(), &ep);
+            if (ep && ep != raw.c_str()) {
                 *out_value = v;
                 *out_end = end;
                 return 1;
@@ -227,13 +231,12 @@ static int gui_number_with_unit(const char *text, const char *const *labels,
         const char *after = gui_find_after_ci(text, labels[li]);
         if (!after) continue;
         size_t win = gui_window_chars_len(after, 60);
-        char *window = gui_strndup(after, win);
-        if (!window) return 0;
+        std::string window(after, win);
         double value = 0;
         size_t end = 0;
-        int ok = gui_next_number(window, &value, &end);
+        int ok = gui_next_number(window.c_str(), &value, &end);
         if (ok) {
-            const char *rest = window + end;
+            const char *rest = window.c_str() + end;
             while (*rest == ' ' || *rest == '\t') rest++;
             size_t ulen = strlen(unit);
             int match = 1;
@@ -247,14 +250,12 @@ static int gui_number_with_unit(const char *text, const char *const *labels,
                     break;
                 }
             }
-            free(window);
             if (match) {
                 *out = value;
                 return 1;
             }
             return 0;
         }
-        free(window);
         return 0;
     }
     return 0;
@@ -271,27 +272,23 @@ static int gui_frag_search_percent(const char *text, double *out) {
     while (*p) {
         const char *nl = strchr(p, '\n');
         size_t linelen = nl ? (size_t)(nl - p) : strlen(p);
-        char *line = gui_strndup(p, linelen);
-        if (!line) return 0;
-        if (strchr(line, '=') && strchr(line, '%')) {
-            char *lower = gui_strdup(line);
-            int skip = 0;
-            if (lower) {
-                gui_ascii_lower(lower);
-                if (strstr(line, "可用") || strstr(lower, "free")) skip = 1;
-                free(lower);
-            }
+        std::string line(p, linelen);
+        if (line.find('=') != std::string::npos && line.find('%') != std::string::npos) {
+            std::string lower = line;
+            std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char c) {
+                return (c >= 'A' && c <= 'Z') ? static_cast<char>(c - 'A' + 'a') : static_cast<char>(c);
+            });
+            int skip = (line.find("可用") != std::string::npos ||
+                        lower.find("free") != std::string::npos) ? 1 : 0;
             if (!skip) {
                 double v = 0;
                 size_t end = 0;
-                if (gui_next_number(line, &v, &end)) {
-                    free(line);
+                if (gui_next_number(line.c_str(), &v, &end)) {
                     *out = v;
                     return 1;
                 }
             }
         }
-        free(line);
         if (!nl) break;
         p = nl + 1;
     }
@@ -309,12 +306,10 @@ static int gui_frag_search_count(const char *text, uint64_t *out) {
     }
     if (!after) return 0;
     size_t win = gui_window_chars_len(after, 60);
-    char *window = gui_strndup(after, win);
-    if (!window) return 0;
+    std::string window(after, win);
     double v = 0;
     size_t end = 0;
-    int ok = gui_next_number(window, &v, &end);
-    free(window);
+    int ok = gui_next_number(window.c_str(), &v, &end);
     if (!ok) return 0;
     *out = (uint64_t)v;
     return 1;
@@ -322,52 +317,49 @@ static int gui_frag_search_count(const char *text, uint64_t *out) {
 
 cdc_frag_parsed_t cdc_frag_parse_defrag(const char *text) {
     cdc_frag_parsed_t r;
-    memset(&r, 0, sizeof(r));
+    r = {};
     if (!text) return r;
     /* U+3000（E3 80 80）折叠为空格，与 Rust 的 replace('\u{3000}', " ") 一致。 */
     size_t len = strlen(text);
-    char *folded = (char *)malloc(len + 1);
-    if (!folded) return r;
-    size_t w = 0;
+    std::string folded;
+    folded.reserve(len);
     for (size_t i = 0; i < len;) {
         if (i + 2 < len && (unsigned char)text[i] == 0xE3 &&
             (unsigned char)text[i + 1] == 0x80 &&
             (unsigned char)text[i + 2] == 0x80) {
-            folded[w++] = ' ';
+            folded.push_back(' ');
             i += 3;
         } else {
-            folded[w++] = text[i++];
+            folded.push_back(text[i++]);
         }
     }
-    folded[w] = '\0';
     double v = 0;
-    if (gui_frag_search_percent(folded, &v)) {
+    if (gui_frag_search_percent(folded.c_str(), &v)) {
         r.has_percent = 1;
         r.percent = v;
     }
     {
         static const char *const labels[] = {"碎片空间", "文件碎片",
                                              "Total fragmented space", "碎片文件"};
-        if (gui_number_with_unit(folded, labels, 4, "GB", &v)) {
+        if (gui_number_with_unit(folded.c_str(), labels, 4, "GB", &v)) {
             r.has_space_gb = 1;
             r.space_gb = v;
         }
     }
     {
         uint64_t c = 0;
-        if (gui_frag_search_count(folded, &c)) {
+        if (gui_frag_search_count(folded.c_str(), &c)) {
             r.has_count = 1;
             r.count = c;
         }
     }
     {
         static const char *const labels[] = {"可用空间", "Free space"};
-        if (gui_number_with_unit(folded, labels, 2, "GB", &v)) {
+        if (gui_number_with_unit(folded.c_str(), labels, 2, "GB", &v)) {
             r.has_free_gb = 1;
             r.free_gb = v;
         }
     }
-    free(folded);
     return r;
 }
 
@@ -468,18 +460,18 @@ int cdc_gui_path_under_dir(const char *path, const char *dir_prefix) {
 
 typedef struct {
     int used;
-    char id[64];
-    char title[128];
-    char stage[128];
-    char unit[32];
+    std::string id;
+    std::string title;
+    std::string stage;
+    std::string unit;
     uint64_t done;
     uint64_t total;
     int active;
     int cancellable;
     int cancelling;
     int mutating;
-    char outcome[16];
-    char summary[512];
+    std::string outcome;
+    std::string summary;
     uint64_t started_ms;
     uint64_t finished_ms;
 } cdc_gui_task_t;
@@ -488,7 +480,7 @@ static cdc_gui_task_t g_tasks[CDC_GUI_MAX_TASKS];
 
 static cdc_gui_task_t *gui_task_find(const char *id) {
     for (int i = 0; i < CDC_GUI_MAX_TASKS; i++) {
-        if (g_tasks[i].used && strcmp(g_tasks[i].id, id) == 0) return &g_tasks[i];
+        if (g_tasks[i].used && g_tasks[i].id == id) return &g_tasks[i];
     }
     return NULL;
 }
@@ -525,14 +517,14 @@ int cdc_task_begin(const char *id, const char *title, int cancellable,
         if (out_error) *out_error = gui_strdup("任务过多");
         return -1;
     }
-    memset(slot, 0, sizeof(*slot));
+    *slot = {};
     slot->used = 1;
-    snprintf(slot->id, sizeof(slot->id), "%s", id);
-    snprintf(slot->title, sizeof(slot->title), "%s", title ? title : "");
+    slot->id = gui_copy_truncated(id, 64);
+    slot->title = gui_copy_truncated(title, 128);
     slot->active = 1;
     slot->cancellable = cancellable;
     slot->mutating = mutating;
-    snprintf(slot->outcome, sizeof(slot->outcome), "running");
+    slot->outcome = "running";
     slot->started_ms = gui_now_ms();
     GUI_UNLOCK();
     return 0;
@@ -544,8 +536,8 @@ void cdc_task_finish(const char *id, const char *outcome, const char *summary) {
     cdc_gui_task_t *t = gui_task_find(id);
     if (t && t->active) {
         t->active = 0;
-        snprintf(t->outcome, sizeof(t->outcome), "%s", outcome ? outcome : "ok");
-        snprintf(t->summary, sizeof(t->summary), "%s", summary ? summary : "");
+        t->outcome = gui_copy_truncated(outcome ? outcome : "ok", 16);
+        t->summary = gui_copy_truncated(summary, 512);
         t->finished_ms = gui_now_ms();
     }
     GUI_UNLOCK();
@@ -556,8 +548,8 @@ static void gui_task_set_str(const char *id, int which, const char *value) {
     GUI_LOCK();
     cdc_gui_task_t *t = gui_task_find(id);
     if (t) {
-        if (which == 0) snprintf(t->stage, sizeof(t->stage), "%s", value ? value : "");
-        if (which == 1) snprintf(t->unit, sizeof(t->unit), "%s", value ? value : "");
+        if (which == 0) t->stage = gui_copy_truncated(value, 128);
+        if (which == 1) t->unit = gui_copy_truncated(value, 32);
     }
     GUI_UNLOCK();
 }
@@ -613,7 +605,7 @@ char *cdc_task_status_json(void) {
     for (int i = 0; i < CDC_GUI_MAX_TASKS; i++) {
         if (g_tasks[i].used && !g_tasks[i].active && g_tasks[i].finished_ms != 0 &&
             now - g_tasks[i].finished_ms >= CDC_GUI_TASK_RETAIN_MS) {
-            memset(&g_tasks[i], 0, sizeof(g_tasks[i]));
+            g_tasks[i] = {};
         }
     }
     cJSON *root = cJSON_CreateObject();
@@ -626,21 +618,21 @@ char *cdc_task_status_json(void) {
         if (!t->used) continue;
         cJSON *o = cJSON_CreateObject();
         if (!o) continue;
-        cJSON_AddStringToObject(o, "id", t->id);
-        cJSON_AddStringToObject(o, "title", t->title);
-        cJSON_AddStringToObject(o, "stage", t->stage);
+        cJSON_AddStringToObject(o, "id", t->id.c_str());
+        cJSON_AddStringToObject(o, "title", t->title.c_str());
+        cJSON_AddStringToObject(o, "stage", t->stage.c_str());
         cJSON_AddNumberToObject(o, "done", (double)t->done);
         cJSON_AddNumberToObject(o, "total", (double)t->total);
-        cJSON_AddStringToObject(o, "unit", t->unit);
+        cJSON_AddStringToObject(o, "unit", t->unit.c_str());
         cJSON_AddBoolToObject(o, "active", t->active);
         cJSON_AddBoolToObject(o, "cancellable", t->cancellable);
         cJSON_AddBoolToObject(o, "cancelling", t->cancelling);
-        cJSON_AddStringToObject(o, "outcome", t->outcome);
-        cJSON_AddStringToObject(o, "summary", t->summary);
+        cJSON_AddStringToObject(o, "outcome", t->outcome.c_str());
+        cJSON_AddStringToObject(o, "summary", t->summary.c_str());
         cJSON_AddNumberToObject(o, "started_ms", (double)t->started_ms);
         cJSON_AddNumberToObject(o, "finished_ms", (double)t->finished_ms);
         cJSON_AddBoolToObject(o, "mutating", t->mutating);
-        cJSON_AddItemToObject(root, t->id, o);
+        cJSON_AddItemToObject(root, t->id.c_str(), o);
     }
     GUI_UNLOCK();
     char *s = cJSON_PrintUnformatted(root);

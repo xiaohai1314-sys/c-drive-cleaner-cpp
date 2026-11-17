@@ -33,6 +33,7 @@
 #include <time.h>
 
 #include <algorithm>
+#include <cstring>
 #include <memory>
 #include <optional>
 #include <span>
@@ -47,6 +48,7 @@
 #include "mft.h" /* CdcFileEntry、cdc_scan_files、USN */
 #include "scan.h" /* cdc_scan_input_t、cdc_scan_hash_groups（真实现；桩已删） */
 #include "gui.h" /* cdc_gui_register_commands（GUI 入口） */
+#include "raii.h"
 
 #ifdef _WIN32
 #include "bridge.h" /* cdc_host_prewarm / cdc_host_run（extern "C"）；Windows 构建加 -Ihost */
@@ -179,57 +181,42 @@ static int run_selftest(void) {
 #ifndef _WIN32
 #include <dirent.h>
 
-typedef struct { char *path; uint64_t size; } BigRow;
-static BigRow *rows = NULL;
-static size_t nrows = 0, caprows = 0;
+struct BigRow {
+    std::string path;
+    uint64_t size = 0;
+};
 
-static void add_row(const char *path, uint64_t size) {
-    if (nrows == caprows) {
-        caprows = caprows ? caprows * 2 : 256;
-        rows = (BigRow *)realloc(rows, caprows * sizeof(BigRow));
-        if (!rows) { perror("realloc"); exit(1); }
-    }
-    rows[nrows].path = strdup(path);
-    rows[nrows].size = size;
-    nrows++;
-}
-
-static void walk(const char *dir) {
-    DIR *d = opendir(dir);
+static void walk(const char *dir, std::vector<BigRow> &rows) {
+    cdc::UniqueDir d(opendir(dir));
     if (!d) return;
     struct dirent *e;
-    while ((e = readdir(d)) != NULL) {
+    while ((e = readdir(d.get())) != NULL) {
         if (strcmp(e->d_name, ".") == 0 || strcmp(e->d_name, "..") == 0) continue;
-        char *full = (char *)malloc(strlen(dir) + strlen(e->d_name) + 2);
-        sprintf(full, "%s/%s", dir, e->d_name);
+        std::string full = std::string(dir) + "/" + e->d_name;
         struct stat st;
-        if (lstat(full, &st) != 0) { free(full); continue; }
+        if (lstat(full.c_str(), &st) != 0) continue;
         if (S_ISDIR(st.st_mode)) {
-            walk(full);
+            walk(full.c_str(), rows);
         } else if (S_ISREG(st.st_mode)) {
             uint64_t size = (uint64_t)st.st_size;
             /* 与 Rust scan_big 相同：2MB 预过滤 + 分档阈值 + 跳过系统文件 */
             if (size >= cdc::kScanMinBytes &&
-                size >= cdc::big_file_threshold_bytes(full) &&
-                !cdc::is_system_file_name(full))
-                add_row(full, size);
+                size >= cdc::big_file_threshold_bytes(full.c_str()) &&
+                !cdc::is_system_file_name(full.c_str()))
+                rows.push_back({std::move(full), size});
         }
-        free(full);
     }
-    closedir(d);
-}
-
-static int cmp_desc(const void *a, const void *b) {
-    uint64_t x = ((const BigRow *)a)->size, y = ((const BigRow *)b)->size;
-    return (x < y) - (x > y);
 }
 
 static int run_big(const char *dir) {
-    walk(dir);
-    qsort(rows, nrows, sizeof(BigRow), cmp_desc);
-    for (size_t i = 0; i < nrows; i++)
-        printf("%llu\t%s\n", (unsigned long long)rows[i].size, rows[i].path);
-    fprintf(stderr, "%zu big files\n", nrows);
+    std::vector<BigRow> rows;
+    walk(dir, rows);
+    std::sort(rows.begin(), rows.end(), [](const BigRow &a, const BigRow &b) {
+        return a.size > b.size;
+    });
+    for (const BigRow &row : rows)
+        printf("%llu\t%s\n", (unsigned long long)row.size, row.path.c_str());
+    fprintf(stderr, "%zu big files\n", rows.size());
     return 0;
 }
 #endif
@@ -260,13 +247,11 @@ static int is_admin(void) {
 /* 固定磁盘列表（如 "C:\"）。与 Rust main.rs 的 fixed_drives 一致：
  * GetLogicalDrives + DRIVE_FIXED；一个都没有时回落到 ["C:\"]。
  * 非 Windows 返回空列表（没有 NTFS 固定盘的概念）。
- * 返回 malloc 的字符串数组（可能为 NULL 且 *out_n=0），调用方 free。 */
-static char **fixed_drives(size_t *out_n) {
-    if (out_n) *out_n = 0;
+ * 返回固定磁盘路径的 C++ 字符串列表；非 Windows 返回空列表。 */
+static std::vector<std::string> fixed_drives() {
 #ifdef _WIN32
     DWORD mask = GetLogicalDrives();
-    char **drives = NULL;
-    size_t n = 0, cap = 0;
+    std::vector<std::string> drives;
     for (int i = 0; i < 26; i++) {
         if ((mask & (1u << i)) == 0) continue;
         char root[4] = {(char)('A' + i), ':', '\\', '\0'};
@@ -275,43 +260,16 @@ static char **fixed_drives(size_t *out_n) {
         int fixed = GetDriveTypeW(w) == DRIVE_FIXED;
         free(w);
         if (!fixed) continue;
-        if (n == cap) {
-            size_t ncap = cap ? cap * 2 : 4;
-            char **np = (char **)realloc(drives, ncap * sizeof(char *));
-            if (!np) break;
-            drives = np;
-            cap = ncap;
-        }
-        drives[n] = strdup(root);
-        if (!drives[n]) break;
-        n++;
+        drives.emplace_back(root);
     }
-    if (n == 0) {
+    if (drives.empty()) {
         /* 回落：与 Rust 一致，哪怕没有固定盘也试 C:。 */
-        free(drives);
-        drives = (char **)malloc(sizeof(char *));
-        if (drives) {
-            drives[0] = strdup("C:\\");
-            if (!drives[0]) {
-                free(drives);
-                drives = NULL;
-            } else {
-                n = 1;
-            }
-        }
+        drives.emplace_back("C:\\");
     }
-    if (out_n) *out_n = n;
     return drives;
 #else
-    (void)0;
-    return NULL;
+    return {};
 #endif
-}
-
-static void free_drives(char **drives, size_t n) {
-    if (!drives) return;
-    for (size_t i = 0; i < n; i++) free(drives[i]);
-    free(drives);
 }
 
 /* 文件的 mtime（unix 秒），取不到返回 0（对应 Rust file_mtime）。 */
@@ -707,14 +665,14 @@ int cdc_index_scope_fresh(cdc::FileIndex *idx, const char *drive, int do_hash,
 }
 
 /* 逐卷索引并返回汇总行。返回 0=全部成功，1=有卷失败。 */
-static int index_all_drives(cdc::FileIndex &idx, char **drives, size_t n_drives, bool quiet,
+static int index_all_drives(cdc::FileIndex &idx, const std::vector<std::string> &drives, bool quiet,
                             bool rebuild, std::string &summary) {
     uint64_t total_files = 0, total_hashed = 0, total_reused = 0, total_incremented = 0;
     uint64_t total_deleted = 0, total_renamed = 0;
     double total_elapsed = 0;
     std::string failed_list;
-    for (size_t i = 0; i < n_drives; i++) {
-        IdxOutcome o = index_volume(idx, drives[i], quiet, true, rebuild);
+    for (const std::string &drive : drives) {
+        IdxOutcome o = index_volume(idx, drive.c_str(), quiet, true, rebuild);
         total_files += o.files;
         total_hashed += o.hashed_new;
         total_reused += o.reused_full;
@@ -724,7 +682,7 @@ static int index_all_drives(cdc::FileIndex &idx, char **drives, size_t n_drives,
         if (o.status == IdxStatus::Incremented) total_incremented++;
         if (o.status == IdxStatus::Failed) {
             if (!failed_list.empty()) failed_list += "、";
-            failed_list += drives[i];
+            failed_list += drive;
         }
     }
     cdc::IndexCounts c = idx.counts();
@@ -752,25 +710,21 @@ int cdc_run_index_summary(int quiet, int rebuild, char *summary, size_t cap) {
         put("--index 需要管理员权限。");
         return 2;
     }
-    size_t n_drives = 0;
-    char **drives = fixed_drives(&n_drives);
-    if (!drives || n_drives == 0) {
+    std::vector<std::string> drives = fixed_drives();
+    if (drives.empty()) {
         put("--index：没有找到固定磁盘。");
-        free_drives(drives, n_drives);
         return 1;
     }
     cdc::Error err;
     std::unique_ptr<cdc::FileIndex> idx = cdc::FileIndex::open_default(&err);
     if (!idx) {
         put("--index：打不开索引库。");
-        free_drives(drives, n_drives);
         return 1;
     }
     std::string text;
-    int rc = index_all_drives(*idx, drives, n_drives, quiet != 0, rebuild != 0, text);
+    int rc = index_all_drives(*idx, drives, quiet != 0, rebuild != 0, text);
     put(text);
     index_log(text.c_str());
-    free_drives(drives, n_drives);
     return rc;
 }
 

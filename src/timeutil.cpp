@@ -1,7 +1,6 @@
 /* timeutil.c — 移植自 Rust 版 desktop/src/timeutil.rs。 */
 #include "timeutil.h"
 
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
@@ -11,6 +10,20 @@
 #ifdef _WIN32
 #include <windows.h>
 #endif
+
+static void write_two_digits(char *out, unsigned value) {
+    if (value > 99) value = 99;
+    out[0] = (char)('0' + value / 10);
+    out[1] = (char)('0' + value % 10);
+}
+
+static void write_four_digits(char *out, unsigned value) {
+    if (value > 9999) value = 9999;
+    out[0] = (char)('0' + (value / 1000) % 10);
+    out[1] = (char)('0' + (value / 100) % 10);
+    out[2] = (char)('0' + (value / 10) % 10);
+    out[3] = (char)('0' + value % 10);
+}
 
 cdc_local_time_t cdc_local_time(uint64_t seconds) {
     cdc_local_time_t out;
@@ -61,7 +74,10 @@ char *cdc_month_label(uint64_t seconds) {
         memcpy(out, "1970-01", 8);
         return out;
     }
-    snprintf(out, 8, "%04u-%02u", t.year, t.month);
+    write_four_digits(out, t.year);
+    out[4] = '-';
+    write_two_digits(out + 5, t.month);
+    out[7] = '\0';
     return out;
 }
 
@@ -81,8 +97,14 @@ char *cdc_stamp(void) {
     cdc_local_time_t t = cdc_local_time(seconds);
     char *out = (char *)malloc(16);
     if (!out) return NULL;
-    snprintf(out, 16, "%04u%02u%02u_%02u%02u%02u", t.year, t.month, t.day,
-             t.hour, t.minute, t.second);
+    write_four_digits(out, t.year);
+    write_two_digits(out + 4, t.month);
+    write_two_digits(out + 6, t.day);
+    out[8] = '_';
+    write_two_digits(out + 9, t.hour);
+    write_two_digits(out + 11, t.minute);
+    write_two_digits(out + 13, t.second);
+    out[15] = '\0';
     return out;
 }
 
@@ -90,7 +112,17 @@ char *cdc_human_stamp(uint64_t seconds) {
     cdc_local_time_t t = cdc_local_time(seconds);
     char *out = (char *)malloc(20);
     if (!out) return NULL;
-    snprintf(out, 20, "%04u-%02u-%02u %02u:%02u:%02u", t.year, t.month, t.day,
-             t.hour, t.minute, t.second);
+    write_four_digits(out, t.year);
+    out[4] = '-';
+    write_two_digits(out + 5, t.month);
+    out[7] = '-';
+    write_two_digits(out + 8, t.day);
+    out[10] = ' ';
+    write_two_digits(out + 11, t.hour);
+    out[13] = ':';
+    write_two_digits(out + 14, t.minute);
+    out[16] = ':';
+    write_two_digits(out + 17, t.second);
+    out[19] = '\0';
     return out;
 }

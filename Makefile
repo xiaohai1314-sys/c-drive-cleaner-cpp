@@ -92,9 +92,10 @@ WIN_SYSLIBS := -ladvapi32 -lshell32 -lwinhttp -lbcrypt -lntdll -lole32 -luser32 
 # MinGW 下静态链接 C++ 运行时，保持单文件 exe（libc++ 用 -lc++，libstdc++ 用 -static-libstdc++）。
 WIN_CXXRT ?= -static
 
-TESTS := test_util test_direnum test_safety test_slice3 test_scan test_gui
+TESTS := test_util test_direnum test_safety test_slice3 test_scan test_gui \
+         test_indextask test_host_security
 # 能在 Windows 上编译运行的测试（其余用 mkdtemp/symlink 等 POSIX API，仅 Linux）。
-WIN_TESTS := test_util test_safety test_slice3
+WIN_TESTS := test_util test_safety test_slice3 test_indextask test_host_security
 
 .PHONY: all native check win win-tests clean frontend
 all: native

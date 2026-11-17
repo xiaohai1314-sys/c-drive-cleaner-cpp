@@ -207,9 +207,10 @@ if(WIN32 AND CDC_BUILD_HOST)
 endif()
 
 # ---------------- 测试 ----------------
-# Windows 上能编译运行的：test_util / test_safety / test_slice3（+ selftest）；
+# Windows 上能编译运行的：test_util / test_safety / test_slice3 / test_indextask /
+# test_host_security（+ selftest）；
 # test_direnum / test_scan / test_gui 用 mkdtemp/symlink/setenv 等 POSIX API，仅非 Windows。
-set(CDC_TESTS test_util test_safety test_slice3)
+set(CDC_TESTS test_util test_safety test_slice3 test_indextask test_host_security)
 if(NOT WIN32)
   list(APPEND CDC_TESTS test_direnum test_scan test_gui)
 endif()

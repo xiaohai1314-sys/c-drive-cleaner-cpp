@@ -23,6 +23,7 @@
 #endif
 
 #include "bridge.h"
+#include "security.h"
 
 #include <WebView2.h>
 
@@ -42,6 +43,8 @@
 
 #include <new>
 #include <string>
+#include <string_view>
+#include <utility>
 
 #ifdef _MSC_VER
 #pragma comment(lib, "shlwapi.lib")
@@ -165,6 +168,135 @@ std::wstring url_decode_path(const std::wstring &in) {
   return out;
 }
 
+constexpr ULONGLONG kMaxAssetBytes = 64ULL * 1024ULL * 1024ULL;
+
+bool final_path_for_handle(HANDLE handle, std::wstring &out) {
+  constexpr DWORD flags = FILE_NAME_NORMALIZED | VOLUME_NAME_DOS;
+  DWORD needed = GetFinalPathNameByHandleW(handle, nullptr, 0, flags);
+  if (needed == 0 || needed > 32768) return false;
+  std::wstring path(needed, L'\0');
+  DWORD written = GetFinalPathNameByHandleW(handle, path.data(), needed, flags);
+  if (written == 0 || written >= needed) return false;
+  path.resize(written);
+  out = std::move(path);
+  return true;
+}
+
+bool path_is_within_root(const std::wstring &root, const std::wstring &path) {
+  if (root.empty() || path.size() <= root.size() ||
+      root.size() > static_cast<size_t>(0x7fffffff))
+    return false;
+  return CompareStringOrdinal(root.data(), static_cast<int>(root.size()),
+                              path.data(), static_cast<int>(root.size()), TRUE) ==
+         CSTR_EQUAL;
+}
+
+bool stream_from_open_file(HANDLE file, ULONGLONG size, IStream **out_stream) {
+  if (!out_stream || size > kMaxAssetBytes) return false;
+  *out_stream = nullptr;
+  if (size == 0) {
+    HRESULT hr = CreateStreamOnHGlobal(nullptr, TRUE, out_stream);
+    return SUCCEEDED(hr) && *out_stream;
+  }
+  HGLOBAL memory = GlobalAlloc(GMEM_MOVEABLE, static_cast<SIZE_T>(size));
+  if (!memory) return false;
+  void *destination = GlobalLock(memory);
+  if (!destination) {
+    GlobalFree(memory);
+    return false;
+  }
+
+  LARGE_INTEGER zero = {};
+  bool ok = SetFilePointerEx(file, zero, nullptr, FILE_BEGIN) != 0;
+  ULONGLONG offset = 0;
+  while (ok && offset < size) {
+    DWORD requested = static_cast<DWORD>(
+        (size - offset) > 0x7fffffffULL ? 0x7fffffffULL : (size - offset));
+    DWORD received = 0;
+    if (!ReadFile(file, static_cast<BYTE *>(destination) + offset, requested,
+                  &received, nullptr) || received == 0) {
+      ok = false;
+      break;
+    }
+    offset += received;
+  }
+  GlobalUnlock(memory);
+  if (!ok || offset != size) {
+    GlobalFree(memory);
+    return false;
+  }
+
+  HRESULT hr = CreateStreamOnHGlobal(memory, TRUE, out_stream);
+  if (FAILED(hr) || !*out_stream) {
+    GlobalFree(memory);
+    return false;
+  }
+  return true;
+}
+
+// Open the requested file without following a reparse point at the final
+// component, then verify the handle's resolved path remains below the held
+// dist-root handle. Reading through that same handle avoids a path re-open race.
+bool open_dist_asset(const std::wstring &relative, std::wstring &full_path,
+                     IStream **out_stream) {
+  if (!out_stream || !cdc::host::is_safe_resource_relative_path(relative))
+    return false;
+  *out_stream = nullptr;
+
+  std::wstring root = g_dist_dir;
+  while (root.size() > 3 && (root.back() == L'\\' || root.back() == L'/'))
+    root.pop_back();
+  if (root.empty()) return false;
+
+  HANDLE root_handle = CreateFileW(
+      root.c_str(), FILE_READ_ATTRIBUTES,
+      FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+      OPEN_EXISTING,
+      FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+  if (root_handle == INVALID_HANDLE_VALUE) return false;
+  BY_HANDLE_FILE_INFORMATION root_info = {};
+  std::wstring root_final;
+  bool root_ok = GetFileInformationByHandle(root_handle, &root_info) &&
+                 (root_info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0 &&
+                 (root_info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) == 0 &&
+                 final_path_for_handle(root_handle, root_final);
+  if (!root_ok || root_final.empty()) {
+    CloseHandle(root_handle);
+    return false;
+  }
+  if (root_final.back() != L'\\') root_final.push_back(L'\\');
+
+  full_path = root + L"\\" + relative;
+  HANDLE file = CreateFileW(full_path.c_str(), GENERIC_READ, FILE_SHARE_READ,
+                            nullptr, OPEN_EXISTING,
+                            FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT,
+                            nullptr);
+  if (file == INVALID_HANDLE_VALUE) {
+    CloseHandle(root_handle);
+    return false;
+  }
+
+  BY_HANDLE_FILE_INFORMATION info = {};
+  std::wstring file_final;
+  bool file_ok = GetFileInformationByHandle(file, &info) &&
+                 (info.dwFileAttributes &
+                  (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT)) == 0 &&
+                 final_path_for_handle(file, file_final) &&
+                 path_is_within_root(root_final, file_final);
+  ULONGLONG size = (static_cast<ULONGLONG>(info.nFileSizeHigh) << 32) |
+                   info.nFileSizeLow;
+  if (!file_ok || size > kMaxAssetBytes) {
+    CloseHandle(file);
+    CloseHandle(root_handle);
+    return false;
+  }
+
+  bool streamed = stream_from_open_file(file, size, out_stream);
+  CloseHandle(file);
+  CloseHandle(root_handle);
+  return streamed;
+}
+
 // ---------------------------------------------------------------------------
 // COM 回调：把 https://cdc.local/* 映射到 dist/ 目录。
 // ---------------------------------------------------------------------------
@@ -209,9 +341,21 @@ class ResourceHandler final
  private:
   void serve(const std::wstring &uri,
              ICoreWebView2WebResourceRequestedEventArgs *args) {
-    static const std::wstring kPrefix = L"https://cdc.local/";
-    if (uri.rfind(kPrefix, 0) != 0) return;  // 不是本站请求，不管。
-    std::wstring rel = uri.substr(kPrefix.size());
+    constexpr std::wstring_view kOrigin = L"https://cdc.local";
+    const std::wstring_view request(uri);
+    if (!cdc::host::is_trusted_origin(request) || request.size() < kOrigin.size() ||
+        !cdc::host::ascii_iequals(request.substr(0, kOrigin.size()), kOrigin))
+      return;
+    std::wstring rel;
+    if (request.size() == kOrigin.size()) {
+      rel = L"index.html";
+    } else if (request[kOrigin.size()] == L'/') {
+      rel.assign(request.substr(kOrigin.size() + 1));
+    } else if (request[kOrigin.size()] == L'?' || request[kOrigin.size()] == L'#') {
+      rel = L"index.html";
+    } else {
+      return;
+    }
     size_t q = rel.find_first_of(L"?#");
     if (q != std::wstring::npos) rel = rel.substr(0, q);
     if (rel.empty() || rel.back() == L'/') rel += L"index.html";
@@ -219,17 +363,13 @@ class ResourceHandler final
     for (auto &ch : rel) {
       if (ch == L'/') ch = L'\\';
     }
-    // 拒绝越出 dist/ 的路径（".."、绝对路径）。
-    if (rel.find(L"..") != std::wstring::npos ||
-        (rel.size() >= 2 && rel[1] == L':')) {
+    if (!cdc::host::is_safe_resource_relative_path(rel)) {
       respond(args, 403, L"Forbidden", L"text/plain", nullptr);
       return;
     }
-    std::wstring full = g_dist_dir + rel;
     IStream *stream = nullptr;
-    HRESULT hr = SHCreateStreamOnFileEx(full.c_str(), STGM_READ,
-                                        FILE_SHARE_READ, FALSE, nullptr, &stream);
-    if (FAILED(hr) || !stream) {
+    std::wstring full;
+    if (!open_dist_asset(rel, full, &stream)) {
       respond(args, 404, L"Not Found", L"text/plain", nullptr);
       return;
     }
@@ -237,8 +377,8 @@ class ResourceHandler final
     headers += content_type_for(full);
     headers += L"\r\n";
     ICoreWebView2WebResourceResponse *response = nullptr;
-    hr = g_env->CreateWebResourceResponse(stream, 200, L"OK", headers.c_str(),
-                                          &response);
+    HRESULT hr = g_env->CreateWebResourceResponse(stream, 200, L"OK",
+                                                   headers.c_str(), &response);
     stream->Release();
     if (SUCCEEDED(hr) && response) {
       args->put_Response(response);
@@ -261,6 +401,78 @@ class ResourceHandler final
     }
   }
 
+  ULONG ref_;
+};
+
+class NavigationStartingHandler final
+    : public ICoreWebView2NavigationStartingEventHandler {
+ public:
+  NavigationStartingHandler() : ref_(1) {}
+  HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void **ppv) override {
+    if (!ppv) return E_POINTER;
+    if (riid == IID_IUnknown ||
+        riid == __uuidof(ICoreWebView2NavigationStartingEventHandler)) {
+      *ppv = static_cast<ICoreWebView2NavigationStartingEventHandler *>(this);
+      AddRef();
+      return S_OK;
+    }
+    *ppv = nullptr;
+    return E_NOINTERFACE;
+  }
+  ULONG STDMETHODCALLTYPE AddRef() override { return ++ref_; }
+  ULONG STDMETHODCALLTYPE Release() override {
+    ULONG count = --ref_;
+    if (count == 0) delete this;
+    return count;
+  }
+  HRESULT STDMETHODCALLTYPE Invoke(
+      ICoreWebView2 *sender,
+      ICoreWebView2NavigationStartingEventArgs *args) override {
+    (void)sender;
+    if (!args) return S_OK;
+    LPWSTR uri = nullptr;
+    HRESULT hr = args->get_Uri(&uri);
+    const bool trusted = SUCCEEDED(hr) && uri &&
+                         cdc_host_is_trusted_origin(uri) != 0;
+    if (uri) CoTaskMemFree(uri);
+    if (!trusted) args->put_Cancel(TRUE);
+    return S_OK;
+  }
+
+ private:
+  ULONG ref_;
+};
+
+class NewWindowRequestedHandler final
+    : public ICoreWebView2NewWindowRequestedEventHandler {
+ public:
+  NewWindowRequestedHandler() : ref_(1) {}
+  HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void **ppv) override {
+    if (!ppv) return E_POINTER;
+    if (riid == IID_IUnknown ||
+        riid == __uuidof(ICoreWebView2NewWindowRequestedEventHandler)) {
+      *ppv = static_cast<ICoreWebView2NewWindowRequestedEventHandler *>(this);
+      AddRef();
+      return S_OK;
+    }
+    *ppv = nullptr;
+    return E_NOINTERFACE;
+  }
+  ULONG STDMETHODCALLTYPE AddRef() override { return ++ref_; }
+  ULONG STDMETHODCALLTYPE Release() override {
+    ULONG count = --ref_;
+    if (count == 0) delete this;
+    return count;
+  }
+  HRESULT STDMETHODCALLTYPE Invoke(
+      ICoreWebView2 *sender,
+      ICoreWebView2NewWindowRequestedEventArgs *args) override {
+    (void)sender;
+    if (args) args->put_Handled(TRUE);
+    return S_OK;
+  }
+
+ private:
   ULONG ref_;
 };
 
@@ -298,20 +510,37 @@ class ControllerHandler final
     if (FAILED(g_controller->get_CoreWebView2(&g_webview)) || !g_webview) {
       return S_OK;
     }
-    // 资源映射：https://cdc.local/* -> dist/。
-    g_webview->AddWebResourceRequestedFilter(
+    // 外部导航/弹窗不能访问原生桥；注册失败时不加载前端（fail closed）。
+    auto *navigation = new (std::nothrow) NavigationStartingHandler();
+    if (!navigation) return S_OK;
+    EventRegistrationToken navigation_token = {};
+    HRESULT navigation_hr =
+        g_webview->add_NavigationStarting(navigation, &navigation_token);
+    navigation->Release();
+    if (FAILED(navigation_hr)) return S_OK;
+    auto *new_window = new (std::nothrow) NewWindowRequestedHandler();
+    if (!new_window) return S_OK;
+    EventRegistrationToken new_window_token = {};
+    HRESULT new_window_hr =
+        g_webview->add_NewWindowRequested(new_window, &new_window_token);
+    new_window->Release();
+    if (FAILED(new_window_hr)) return S_OK;
+    // 资源映射：https://cdc.local/* -> dist/。注册任何一项失败都不导航，
+    // 否则 WebView 可能尝试从网络解析 cdc.local 并加载非本地页面。
+    HRESULT filter_hr = g_webview->AddWebResourceRequestedFilter(
         L"https://cdc.local/*", COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL);
+    if (FAILED(filter_hr)) return S_OK;
     auto *resource = new (std::nothrow) ResourceHandler();
-    if (resource) {
-      g_webview->add_WebResourceRequested(resource, nullptr);
-      resource->Release();
-    }
+    if (!resource) return S_OK;
+    HRESULT resource_hr = g_webview->add_WebResourceRequested(resource, nullptr);
+    resource->Release();
+    if (FAILED(resource_hr)) return S_OK;
     // 前端消息桥。
     auto *handler = cdc_bridge_create_message_handler(g_webview, g_hwnd);
-    if (handler) {
-      g_webview->add_WebMessageReceived(handler, nullptr);
-      handler->Release();
-    }
+    if (!handler) return S_OK;
+    HRESULT bridge_hr = g_webview->add_WebMessageReceived(handler, nullptr);
+    handler->Release();
+    if (FAILED(bridge_hr)) return S_OK;
     resize_webview();
     g_webview->Navigate(L"https://cdc.local/index.html");
     return S_OK;

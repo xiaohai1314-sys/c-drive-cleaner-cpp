@@ -6,6 +6,7 @@
 // 直接嵌入后端返回的 JSON 文本，不再二次解析。
 
 #include "bridge.h"
+#include "security.h"
 
 #include <WebView2.h>
 
@@ -51,6 +52,10 @@ cdc_command_handler find_handler(const std::string &cmd) {
 
 }  // namespace
 
+extern "C" int cdc_host_is_trusted_origin(const wchar_t *uri) {
+  return uri && cdc::host::is_trusted_origin(uri) ? 1 : 0;
+}
+
 extern "C" int cdc_bridge_register(const char *cmd, cdc_command_handler handler) {
   if (!cmd || !*cmd || !handler) return -1;
   std::lock_guard<std::mutex> lock(g_table_mutex);
@@ -72,8 +77,10 @@ std::string wide_to_utf8(const wchar_t *wstr) {
   if (!wstr) return std::string();
   int len = WideCharToMultiByte(CP_UTF8, 0, wstr, -1, nullptr, 0, nullptr, nullptr);
   if (len <= 0) return std::string();
-  std::string out(static_cast<size_t>(len - 1), '\0');
-  WideCharToMultiByte(CP_UTF8, 0, wstr, -1, out.data(), len, nullptr, nullptr);
+  std::string out(static_cast<size_t>(len), '\0');
+  int written = WideCharToMultiByte(CP_UTF8, 0, wstr, -1, out.data(), len, nullptr, nullptr);
+  if (written != len) return std::string();
+  out.resize(static_cast<size_t>(len - 1));
   return out;
 }
 
@@ -306,10 +313,10 @@ extern "C" int cdc_bridge_parse_envelope(const char *json, long *id_out,
   if (!have_cmd) return -2;
   *id_out = id;
   if (cmd.size() >= cmd_cap) return -2;
-  memcpy(cmd_out, cmd.data(), cmd.size());
+  if (!cmd.empty()) memcpy(cmd_out, cmd.data(), cmd.size());
   cmd_out[cmd.size()] = '\0';
   if (args.size() >= args_cap) return -3;
-  memcpy(args_out, args.data(), args.size());
+  if (!args.empty()) memcpy(args_out, args.data(), args.size());
   args_out[args.size()] = '\0';
   return 0;
 }
@@ -458,6 +465,13 @@ class WebMessageHandler final
       ICoreWebView2WebMessageReceivedEventArgs *args) override {
     (void)sender;
     if (!args) return S_OK;
+    LPWSTR source = nullptr;
+    HRESULT source_hr = args->get_Source(&source);
+    const bool trusted = SUCCEEDED(source_hr) && source &&
+                         cdc_host_is_trusted_origin(source) != 0;
+    if (source) CoTaskMemFree(source);
+    if (!trusted) return S_OK;
+
     LPWSTR json = nullptr;
     if (SUCCEEDED(args->get_WebMessageAsJson(&json)) && json) {
       cdc_bridge_handle_message(webview_, hwnd_, json);
