@@ -550,22 +550,11 @@ int main(void) {
     snprintf(tmpapp, sizeof(tmpapp), "/tmp/cdc-test-slice3-app-%ld", (long)my_pid());
 #endif
 #ifndef _WIN32
-    /* 让 LOCALAPPDATA 指向真实可写的 Linux 临时目录，供 logs 写日志；
-     * 但 rules 的 allowlist 判定依赖 LOCALAPPDATA 的 Windows 形态值，
-     * 因此 logs 测试用单独的进程级覆盖：这里先跑 rules/im/system，
-     * logs 测试内部再临时改。——简化：logs 用 cdc_logs_dir 的回退
-     * （LOCALAPPDATA 为 Windows 路径时 Linux 下建目录失败，write_log
-     * 应返回错误而非崩溃；为测成功路径，test_logs 内临时改 env）。 */
-    /* logs.c 的 join_and_create 只建一层目录，父目录须先存在。 */
+    /* 预建应用数据目录，供成功路径日志测试使用。 */
     mkdir(tmpapp, 0755);
 #endif
 
-    test_rules_load_all();
-    test_rules_validate();
-    test_rules_update_no_url();
-    test_rules_config();
-    test_timeutil();
-    /* logs 成功路径需要可写的 LOCALAPPDATA：临时指向刚创建的目录。 */
+    /* log_dir 会在首次 cdc_app_data_dir 调用时缓存；先用有效临时目录测试日志。 */
     {
         auto saved = cdc::getenv_utf8("LOCALAPPDATA");
         set_env("LOCALAPPDATA", tmpapp);
@@ -573,6 +562,12 @@ int main(void) {
         if (saved) set_env("LOCALAPPDATA", saved->c_str());
         else set_env("LOCALAPPDATA", nullptr);
     }
+
+    test_rules_load_all();
+    test_rules_validate();
+    test_rules_update_no_url();
+    test_rules_config();
+    test_timeutil();
     test_im_classify();
     test_im_thumbnail_preview();
     test_system_pure();
