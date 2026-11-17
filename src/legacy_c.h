@@ -71,3 +71,64 @@ typedef enum { CDC_LOG_DEBUG = 0, CDC_LOG_INFO = 1, CDC_LOG_WARN = 2, CDC_LOG_ER
 void cdc_log(cdc_log_level_t level, const char *fmt, ...);
 int cdc_log_dir(char *out, size_t cap);
 char *cdc_cache_dir(void);
+
+// ---- safety（C 版接口；实现转发到 safety.h 的 cdc:: 新接口） ----
+#include <cstdio>
+char *cdc_getenv_utf8(const char *name);
+FILE *cdc_fopen_utf8(const char *path, const char *mode);
+void cdc_strvec_free(char **vec, size_t n);
+int cdc_glob_match(const char *pattern, const char *text);
+int cdc_glob_valid(const char *pattern);
+typedef void *cdc_handle_t;
+typedef struct cdc_handle_chain cdc_handle_chain_t;
+void cdc_handle_chain_free(cdc_handle_chain_t *chain);
+int cdc_handle_file_size(cdc_handle_t h, uint64_t *out_size, cdc_err_t *err);
+int cdc_handle_read(cdc_handle_t h, uint8_t *buf, size_t want, size_t *out_got, cdc_err_t *err);
+int cdc_handle_write_all(cdc_handle_t h, const uint8_t *buf, size_t len, cdc_err_t *err);
+int cdc_handle_sync(cdc_handle_t h, cdc_err_t *err);
+int cdc_handle_seek_start(cdc_handle_t h, cdc_err_t *err);
+typedef int (*cdc_walk_fn)(void *ctx, const char *path, int is_dir, int is_symlink, uint64_t size,
+                           uint64_t mtime, uint32_t attrs);
+int cdc_walk_dir(const char *root, int min_depth, cdc_walk_fn fn, void *ctx, cdc_err_t *err);
+char *cdc_basename(const char *path);
+char *cdc_normalize(const char *path);
+int cdc_under_marker(const char *path, const char *const *markers, size_t nmarkers);
+int cdc_is_drive_root(const char *path);
+int cdc_is_critical_file(const char *path);
+int cdc_is_never_clean(const char *path);
+int cdc_is_password_store(const char *path);
+int cdc_path_syntax_error(const char *path);
+int cdc_is_system_path(const char *path);
+int cdc_is_protected_path(const char *path);
+int cdc_is_user_library(const char *path);
+int cdc_is_within(const char *path, const char **roots, size_t nroots);
+int cdc_is_reparse_point(const char *path);
+int cdc_reparse_point_status(const char *path, int *out_is_reparse, cdc_err_t *err);
+int cdc_under_remote_allowlist(const char *path);
+int cdc_execution_forbidden(const char *path, int untrusted);
+int cdc_explicit_delete_forbidden(const char *path);
+typedef enum { CDC_DELETE_DELETED = 0, CDC_DELETE_SKIPPED = 1, CDC_DELETE_FAILED = 2 } cdc_delete_outcome_t;
+int cdc_mark_delete(cdc_handle_t file);
+cdc_delete_outcome_t cdc_delete_file_checked(const char *path, const char **roots, size_t nroots,
+                                             int untrusted, cdc_err_t *err);
+int cdc_pin_directory_checked(const char *path, const char **roots, size_t nroots,
+                              cdc_handle_chain_t **out_chain, cdc_err_t *err);
+int cdc_create_directory_tree_checked(const char *path, cdc_handle_chain_t **out_chain,
+                                      cdc_err_t *err);
+int cdc_create_directory_checked(const char *path, const char **roots, size_t nroots,
+                                 cdc_handle_chain_t **out_chain, cdc_handle_t *out_dir,
+                                 cdc_err_t *err);
+int cdc_create_new_file_checked(const char *path, const char **roots, size_t nroots,
+                                cdc_handle_chain_t **out_chain, cdc_handle_t *out_file,
+                                cdc_err_t *err);
+int cdc_open_read_file_checked(const char *path, const char **roots, size_t nroots,
+                               cdc_handle_chain_t **out_chain, cdc_handle_t *out_file,
+                               cdc_err_t *err);
+int cdc_remove_directory_checked(const char *path, const char **roots, size_t nroots,
+                                 int *out_deleted, cdc_err_t *err);
+int cdc_remove_tree_checked(const char *root, const char **allowed_roots, size_t nroots,
+                            uint64_t *out_removed, cdc_err_t *err);
+int cdc_rename_directory_sibling_checked(const char *from, const char *to,
+                                         const char **allowed_roots, size_t nroots,
+                                         cdc_err_t *err);
+int cdc_remove_empty_dirs(const char *root);

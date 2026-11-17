@@ -179,3 +179,173 @@ char *cdc_cache_dir(void) {
     if (out) memcpy(out, d->c_str(), d->size() + 1);
     return out;
 }
+
+// ---- safety 转发 ----
+#include "raii.h"
+#include "safety.h"
+
+struct cdc_handle_chain {
+    cdc::HandleChain chain;
+};
+
+namespace {
+char *dup_c(const std::string &s) {
+    char *p = (char *)malloc(s.size() + 1);
+    if (p) memcpy(p, s.c_str(), s.size() + 1);
+    return p;
+}
+cdc::RootList roots_of(const char **roots, size_t n) {
+    return roots ? cdc::RootList(roots, n) : cdc::RootList();
+}
+int give_chain(cdc::HandleChain &c, cdc_handle_chain_t **out) {
+    if (!out) return CDC_ERR_INVALID_ARG;
+    *out = new cdc_handle_chain{std::move(c)};
+    return CDC_OK;
+}
+}  // namespace
+
+char *cdc_getenv_utf8(const char *name) {
+    std::optional<std::string> v = cdc::getenv_utf8(name);
+    return v ? dup_c(*v) : NULL;
+}
+FILE *cdc_fopen_utf8(const char *path, const char *mode) {
+    if (!path || !mode) return NULL;
+    return cdc::fopen_utf8(path, mode).release();
+}
+void cdc_strvec_free(char **vec, size_t n) {
+    if (!vec) return;
+    for (size_t i = 0; i < n; i++) free(vec[i]);
+    free(vec);
+}
+int cdc_glob_match(const char *p, const char *t) { return cdc::glob_match(cdc::sv(p), cdc::sv(t)); }
+int cdc_glob_valid(const char *p) { return p ? cdc::glob_valid(p) : 0; }
+void cdc_handle_chain_free(cdc_handle_chain_t *chain) { delete chain; }
+int cdc_handle_file_size(cdc_handle_t h, uint64_t *out, cdc_err_t *err) {
+    uint64_t v = 0;
+    int rc = cdc::handle_file_size(h, v, err);
+    if (rc == CDC_OK && out) *out = v;
+    return rc;
+}
+int cdc_handle_read(cdc_handle_t h, uint8_t *buf, size_t want, size_t *out_got, cdc_err_t *err) {
+    size_t got = 0;
+    int rc = cdc::handle_read(h, buf, want, got, err);
+    if (rc == CDC_OK && out_got) *out_got = got;
+    return rc;
+}
+int cdc_handle_write_all(cdc_handle_t h, const uint8_t *buf, size_t len, cdc_err_t *err) {
+    return cdc::handle_write_all(h, buf, len, err);
+}
+int cdc_handle_sync(cdc_handle_t h, cdc_err_t *err) { return cdc::handle_sync(h, err); }
+int cdc_handle_seek_start(cdc_handle_t h, cdc_err_t *err) { return cdc::handle_seek_start(h, err); }
+int cdc_walk_dir(const char *root, int min_depth, cdc_walk_fn fn, void *ctx, cdc_err_t *err) {
+    if (!fn) return cdc::walk_dir(root, min_depth, nullptr, err);
+    std::string path;
+    return cdc::walk_dir(root, min_depth, [&](const cdc::WalkEntry &e) {
+        path.assign(e.path);
+        return fn(ctx, path.c_str(), e.is_dir, e.is_symlink, e.size, e.mtime, e.attrs);
+    }, err);
+}
+char *cdc_basename(const char *path) { return dup_c(cdc::basename(path)); }
+char *cdc_normalize(const char *path) { return dup_c(cdc::normalize(path)); }
+int cdc_under_marker(const char *path, const char *const *markers, size_t n) {
+    return markers ? cdc::under_marker(path, std::span<const char *const>(markers, n)) : 0;
+}
+int cdc_is_drive_root(const char *p) { return cdc::is_drive_root(p); }
+int cdc_is_critical_file(const char *p) { return cdc::is_critical_file(p); }
+int cdc_is_never_clean(const char *p) { return cdc::is_never_clean(p); }
+int cdc_is_password_store(const char *p) { return cdc::is_password_store(p); }
+int cdc_path_syntax_error(const char *p) { return cdc::path_syntax_error(p); }
+int cdc_is_system_path(const char *p) { return cdc::is_system_path(p); }
+int cdc_is_protected_path(const char *p) { return cdc::is_protected_path(p); }
+int cdc_is_user_library(const char *p) { return cdc::is_user_library(p); }
+int cdc_is_within(const char *p, const char **roots, size_t n) {
+    return cdc::is_within(p, roots_of(roots, n));
+}
+int cdc_is_reparse_point(const char *p) { return cdc::is_reparse_point(p); }
+int cdc_reparse_point_status(const char *path, int *out, cdc_err_t *err) {
+    if (!path || !out) {
+        cdc::err_set(err, CDC_ERR_INVALID_ARG, "path is NULL");
+        return CDC_ERR_INVALID_ARG;
+    }
+    bool r = false;
+    int rc = cdc::reparse_point_status(path, r, err);
+    if (rc == CDC_OK) *out = r;
+    return rc;
+}
+int cdc_under_remote_allowlist(const char *p) { return cdc::under_remote_allowlist(p); }
+int cdc_execution_forbidden(const char *p, int untrusted) {
+    return cdc::execution_forbidden(p, untrusted != 0);
+}
+int cdc_explicit_delete_forbidden(const char *p) { return cdc::explicit_delete_forbidden(p); }
+int cdc_mark_delete(cdc_handle_t file) { return cdc::mark_delete(file); }
+cdc_delete_outcome_t cdc_delete_file_checked(const char *path, const char **roots, size_t n,
+                                             int untrusted, cdc_err_t *err) {
+    return (cdc_delete_outcome_t)cdc::delete_file_checked(path, roots_of(roots, n), untrusted != 0,
+                                                          err);
+}
+int cdc_pin_directory_checked(const char *path, const char **roots, size_t n,
+                              cdc_handle_chain_t **out_chain, cdc_err_t *err) {
+    cdc::HandleChain c;
+    int rc = cdc::pin_directory_checked(path, roots_of(roots, n), c, err);
+    return rc == CDC_OK ? give_chain(c, out_chain) : rc;
+}
+int cdc_create_directory_tree_checked(const char *path, cdc_handle_chain_t **out_chain,
+                                      cdc_err_t *err) {
+    cdc::HandleChain c;
+    int rc = cdc::create_directory_tree_checked(path, c, err);
+    return rc == CDC_OK ? give_chain(c, out_chain) : rc;
+}
+int cdc_create_directory_checked(const char *path, const char **roots, size_t n,
+                                 cdc_handle_chain_t **out_chain, cdc_handle_t *out_dir,
+                                 cdc_err_t *err) {
+    cdc::HandleChain c;
+    cdc::OwnedHandle h;
+    int rc = cdc::create_directory_checked(path, roots_of(roots, n), c, h, err);
+    if (rc != CDC_OK) return rc;
+    if (out_dir) *out_dir = h.release();  // C 版语义：调用方 CloseHandle
+    return give_chain(c, out_chain);
+}
+int cdc_create_new_file_checked(const char *path, const char **roots, size_t n,
+                                cdc_handle_chain_t **out_chain, cdc_handle_t *out_file,
+                                cdc_err_t *err) {
+    cdc::HandleChain c;
+    cdc::OwnedHandle h;
+    int rc = cdc::create_new_file_checked(path, roots_of(roots, n), c, h, err);
+    if (rc != CDC_OK) return rc;
+    if (out_file) *out_file = h.release();
+    return give_chain(c, out_chain);
+}
+int cdc_open_read_file_checked(const char *path, const char **roots, size_t n,
+                               cdc_handle_chain_t **out_chain, cdc_handle_t *out_file,
+                               cdc_err_t *err) {
+    cdc::HandleChain c;
+    cdc::OwnedHandle h;
+    int rc = cdc::open_read_file_checked(path, roots_of(roots, n), c, h, err);
+    if (rc != CDC_OK) return rc;
+    if (out_file) *out_file = h.release();
+    return give_chain(c, out_chain);
+}
+int cdc_remove_directory_checked(const char *path, const char **roots, size_t n,
+                                 int *out_deleted, cdc_err_t *err) {
+    if (!out_deleted) {
+        cdc::err_set(err, CDC_ERR_INVALID_ARG, "out_deleted is NULL");
+        return CDC_ERR_INVALID_ARG;
+    }
+    bool d = false;
+    int rc = cdc::remove_directory_checked(path, roots_of(roots, n), d, err);
+    *out_deleted = d;
+    return rc;
+}
+int cdc_remove_tree_checked(const char *root, const char **roots, size_t n,
+                            uint64_t *out_removed, cdc_err_t *err) {
+    if (!out_removed) {
+        cdc::err_set(err, CDC_ERR_INVALID_ARG, "out_removed is NULL");
+        return CDC_ERR_INVALID_ARG;
+    }
+    return cdc::remove_tree_checked(root, roots_of(roots, n), *out_removed, err);
+}
+int cdc_rename_directory_sibling_checked(const char *from, const char *to, const char **roots,
+                                         size_t n, cdc_err_t *err) {
+    return cdc::rename_directory_sibling_checked(from, to, roots_of(roots, n), err);
+}
+int cdc_remove_empty_dirs(const char *root) { return cdc::remove_empty_dirs(root); }
