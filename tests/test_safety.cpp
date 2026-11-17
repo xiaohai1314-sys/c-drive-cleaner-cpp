@@ -244,6 +244,13 @@ static void test_reparse_linux() {
 /* ---------------- Windows 专属：句柄删除 / junction / 改名 ---------------- */
 
 #ifdef _WIN32
+static void remove_test_tree(const char *path) {
+    if (GetFileAttributesA(path) == INVALID_FILE_ATTRIBUTES) return;
+    char cmd[MAX_PATH + 64];
+    snprintf(cmd, sizeof(cmd), "rmdir /s /q \"%s\"", path);
+    (void)system(cmd);
+}
+
 static void test_temp_delete_windows() {
     /* Rust: temp_file_can_be_deleted_but_only_inside_roots */
     char tmp[MAX_PATH];
@@ -287,25 +294,46 @@ static void test_junction_windows() {
     snprintf(root, sizeof(root), "%s\\root", base);
     snprintf(outside, sizeof(outside), "%s\\outside", base);
     snprintf(junction, sizeof(junction), "%s\\redirect", root);
-    CreateDirectoryA(root, nullptr);
-    CreateDirectoryA(outside, nullptr);
+    remove_test_tree(base);
+    CHECK(CreateDirectoryA(base, nullptr) != 0, "create junction test base");
+    if (GetFileAttributesA(base) == INVALID_FILE_ATTRIBUTES) return;
+    CHECK(CreateDirectoryA(root, nullptr) != 0, "create junction test root");
+    if (GetFileAttributesA(root) == INVALID_FILE_ATTRIBUTES) {
+        remove_test_tree(base);
+        return;
+    }
+    CHECK(CreateDirectoryA(outside, nullptr) != 0, "create junction target");
+    if (GetFileAttributesA(outside) == INVALID_FILE_ATTRIBUTES) {
+        remove_test_tree(base);
+        return;
+    }
     char keep[MAX_PATH], journal[MAX_PATH];
     snprintf(keep, sizeof(keep), "%s\\keep.txt", outside);
     snprintf(journal, sizeof(journal), "%s\\im_move_pending.json", outside);
     FILE *f = fopen(keep, "wb");
-    if (f) {
-        fputs("must survive", f);
-        fclose(f);
+    CHECK(f != nullptr, "create outside keep file");
+    if (!f) {
+        remove_test_tree(base);
+        return;
     }
+    fputs("must survive", f);
+    fclose(f);
     f = fopen(journal, "wb");
-    if (f) {
-        fputs("must not be read or overwritten", f);
-        fclose(f);
+    CHECK(f != nullptr, "create outside journal file");
+    if (!f) {
+        remove_test_tree(base);
+        return;
     }
+    fputs("must not be read or overwritten", f);
+    fclose(f);
     char cmd[1024];
     snprintf(cmd, sizeof(cmd), "cmd.exe /D /C mklink /J \"%s\" \"%s\"", junction, outside);
     int rc = system(cmd);
     CHECK(rc == 0, "mklink /J succeeds");
+    if (rc != 0) {
+        remove_test_tree(base);
+        return;
+    }
     const char *roots[1] = { root };
     cdc::HandleChain chain;
     cdc::OwnedHandle fh;
@@ -343,8 +371,7 @@ static void test_junction_windows() {
     CHECK(GetFileAttributesA(junction) != INVALID_FILE_ATTRIBUTES, "junction itself survives");
     snprintf(cmd, sizeof(cmd), "rmdir \"%s\"", junction);
     (void)system(cmd);
-    snprintf(cmd, sizeof(cmd), "rmdir /s /q \"%s\"", base);
-    (void)system(cmd);
+    remove_test_tree(base);
 }
 
 static void test_rename_windows() {
@@ -355,28 +382,42 @@ static void test_rename_windows() {
     snprintf(base, sizeof(base), "%s\\cdc-handle-rename-%lu", tmp, (unsigned long)GetCurrentProcessId());
     snprintf(source, sizeof(source), "%s\\source", base);
     snprintf(backup, sizeof(backup), "%s\\source_backup_20261116_200000", base);
-    CreateDirectoryA(source, nullptr);
+    remove_test_tree(base);
+    CHECK(CreateDirectoryA(base, nullptr) != 0, "create rename test base");
+    if (GetFileAttributesA(base) == INVALID_FILE_ATTRIBUTES) return;
+    CHECK(CreateDirectoryA(source, nullptr) != 0, "create rename test source");
+    if (GetFileAttributesA(source) == INVALID_FILE_ATTRIBUTES) {
+        remove_test_tree(base);
+        return;
+    }
     char data[MAX_PATH];
     snprintf(data, sizeof(data), "%s\\data.bin", source);
     FILE *f = fopen(data, "wb");
-    if (f) {
-        fputs("keep data", f);
-        fclose(f);
+    CHECK(f != nullptr, "create rename test data");
+    if (!f) {
+        remove_test_tree(base);
+        return;
     }
+    fputs("keep data", f);
+    fclose(f);
     const char *allowed[1] = { source };
     cdc::Error e;
-    CHECK(cdc::rename_directory_sibling_checked(source, backup, allowed, &e) == cdc::kOk,
+    int rename_rc = cdc::rename_directory_sibling_checked(source, backup, allowed, &e);
+    CHECK(rename_rc == cdc::kOk,
           "rename source -> backup ok");
+    if (rename_rc != cdc::kOk) {
+        remove_test_tree(base);
+        return;
+    }
     CHECK(GetFileAttributesA(source) == INVALID_FILE_ATTRIBUTES, "source gone after rename");
     char bdata[MAX_PATH];
     snprintf(bdata, sizeof(bdata), "%s\\data.bin", backup);
     CHECK(GetFileAttributesA(bdata) != INVALID_FILE_ATTRIBUTES, "backup data exists");
-    CHECK(cdc::rename_directory_sibling_checked(backup, source, allowed, &e) == cdc::kOk,
+    int restore_rc = cdc::rename_directory_sibling_checked(backup, source, allowed, &e);
+    CHECK(restore_rc == cdc::kOk,
           "rename backup -> source ok");
     CHECK(GetFileAttributesA(data) != INVALID_FILE_ATTRIBUTES, "source data back");
-    char cmd[512];
-    snprintf(cmd, sizeof(cmd), "rmdir /s /q \"%s\"", base);
-    (void)system(cmd);
+    remove_test_tree(base);
 }
 #endif
 

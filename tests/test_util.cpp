@@ -182,7 +182,7 @@ void test_err() {
 // ---------------- 日志 ----------------
 
 bool file_contains(const std::string &path, const char *needle) {
-    UniqueFile f(std::fopen(path.c_str(), "rb"));
+    UniqueFile f = fopen_utf8(path.c_str(), "rb");
     if (!f) return false;
     std::string data;
     char buf[4096];

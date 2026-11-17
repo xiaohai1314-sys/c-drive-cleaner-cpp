@@ -571,19 +571,22 @@ IndexRow irow(uint64_t serial, uint64_t frn, const char *path,
     return r;
 }
 
-/* 临时库路径：Linux 用 mkdtemp，Windows 用 %TEMP% + 进程号子目录。 */
+/* 临时库路径：Linux 用 mkdtemp；Windows 每次用 GetTempFileNameW 取唯一文件。 */
 int fi_tmp_db(char *buf, size_t cap) {
+    if (!buf || cap == 0) return -1;
 #ifdef _WIN32
-    // GetTempPathW：用户名可能含中文，窄版 GetTempPathA 会丢字。
     wchar_t wtmp[MAX_PATH + 1];
     DWORD n = GetTempPathW(MAX_PATH + 1, wtmp);
     if (n == 0 || n > MAX_PATH) return -1;
-    std::optional<std::string> tmp = wide_to_utf8(wtmp);
-    if (!tmp) return -1;
-    std::string dir = format("%scdc-fi-test-%lu", tmp->c_str(),
-                             static_cast<unsigned long>(GetCurrentProcessId()));
-    mkdirs(dir);
-    if (std::snprintf(buf, cap, "%s\\test.db", dir.c_str()) >= static_cast<int>(cap)) return -1;
+    // GetTempFileNameW 同时创建空文件；SQLite 可直接打开并初始化它。
+    wchar_t wdb[MAX_PATH + 1];
+    if (GetTempFileNameW(wtmp, L"cfi", 0, wdb) == 0) return -1;
+    std::optional<std::string> db = wide_to_utf8(wdb);
+    if (!db || db->size() >= cap) {
+        DeleteFileW(wdb);
+        return -1;
+    }
+    std::memcpy(buf, db->c_str(), db->size() + 1);
     return 0;
 #else
     char dir[] = "/tmp/cdc-fi-test-XXXXXX";

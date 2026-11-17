@@ -32,10 +32,12 @@
 #include "cdc_process.h"
 #include "recycle.h"
 #include "rules.h"
+#include "raii.h"
 #include "safety.h"
 #include "shred.h"
 #include "system.h"
 #include "timeutil.h"
+#include "util.h"
 
 #ifdef _WIN32
 #include <windows.h>
@@ -61,19 +63,52 @@ static long my_pid(void) {
 #endif
 }
 
+#ifdef _WIN32
+static int make_temp_dir(char *out, size_t cap, const wchar_t *prefix) {
+    if (!out || cap == 0) return 0;
+    wchar_t temp[MAX_PATH + 1] = {};
+    wchar_t placeholder[MAX_PATH + 1] = {};
+    DWORD n = GetTempPathW(static_cast<DWORD>(MAX_PATH + 1), temp);
+    if (n == 0 || n > MAX_PATH) return 0;
+    if (GetTempFileNameW(temp, prefix, 0, placeholder) == 0) return 0;
+    // 保留占位文件时创建唯一同名 .d 目录，避免释放名字后再创建的竞态。
+    std::wstring path(placeholder);
+    path += L".d";
+    if (path.size() >= MAX_PATH || !CreateDirectoryW(path.c_str(), nullptr)) {
+        DeleteFileW(placeholder);
+        return 0;
+    }
+    DeleteFileW(placeholder);
+    std::optional<std::string> utf8 = cdc::wide_to_utf8(path.c_str());
+    if (!utf8 || utf8->size() >= cap) {
+        RemoveDirectoryW(path.c_str());
+        return 0;
+    }
+    memcpy(out, utf8->c_str(), utf8->size() + 1);
+    return 1;
+}
+#endif
+
 static void set_env(const char *name, const char *value) {
 #ifdef _WIN32
-    SetEnvironmentVariableA(name, value);
+    std::optional<std::wstring> wname = cdc::utf8_to_wide(name);
+    if (!wname) return;
+    if (!value) {
+        SetEnvironmentVariableW(wname->c_str(), nullptr);
+        return;
+    }
+    std::optional<std::wstring> wvalue = cdc::utf8_to_wide(value);
+    if (wvalue) SetEnvironmentVariableW(wname->c_str(), wvalue->c_str());
 #else
-    setenv(name, value, 1);
+    if (value) setenv(name, value, 1);
+    else unsetenv(name);
 #endif
 }
 
-static void write_file(const char *path, const void *data, size_t n) {
-    FILE *f = fopen(path, "wb");
-    if (!f) return;
-    if (n > 0) fwrite(data, 1, n, f);
-    fclose(f);
+static int write_file(const char *path, const void *data, size_t n) {
+    auto f = cdc::fopen_utf8(path, "wb");
+    if (!f) return 0;
+    return n == 0 || fwrite(data, 1, n, f.get()) == n;
 }
 
 /* ---------------- rules ---------------- */
@@ -144,7 +179,8 @@ static void test_rules_update_no_url(void) {
     cdc_err_t e;
     int rc = cdc_rules_update(&out, &e);
     CHECK(rc != CDC_OK, "update with empty url fails (rc=%d)", rc);
-    CHECK(strstr(e.message, "没有配置") != NULL || strstr(e.message, "远程规则") != NULL ||
+    CHECK(strstr(e.message, "没有配置") != NULL || strstr(e.message, "未配置") != NULL ||
+              strstr(e.message, "远程规则") != NULL ||
               strstr(e.message, "WinHTTP") != NULL,
           "update error mentions missing config: %s", e.message);
 }
@@ -253,20 +289,28 @@ static void test_im_classify(void) {
 }
 
 static void test_im_thumbnail_preview(void) {
-    char base[256];
-    snprintf(base, sizeof(base), "/tmp/cdc-test-slice3-%ld", (long)my_pid());
+    char base[1024];
 #ifndef _WIN32
-    char cmd[512];
+    char cmd[1200];
+    snprintf(base, sizeof(base), "/tmp/cdc-test-slice3-%ld", (long)my_pid());
     snprintf(cmd, sizeof(cmd), "rm -rf %s", base);
     { int rc = system(cmd); (void)rc; }
     mkdir(base, 0755);
+#else
+    if (!make_temp_dir(base, sizeof(base), L"cdi")) {
+        CHECK(0, "create thumbnail/preview temp directory");
+        return;
+    }
 #endif
     /* 最小 JPEG：FF D8 FF + 任意内容。 */
-    char jpg[300];
+    char jpg[1200];
     snprintf(jpg, sizeof(jpg), "%s/a.jpg", base);
     uint8_t jpeg_head[16] = { 0xFF, 0xD8, 0xFF, 0xE0, 0, 0, 0, 0,
                               0, 0, 0, 0, 0, 0, 0, 0 };
-    write_file(jpg, jpeg_head, sizeof(jpeg_head));
+    if (!write_file(jpg, jpeg_head, sizeof(jpeg_head))) {
+        CHECK(0, "create plain JPEG fixture");
+        return;
+    }
     const char *mime = NULL;
     uint8_t *data = NULL;
     size_t len = 0;
@@ -276,11 +320,14 @@ static void test_im_thumbnail_preview(void) {
           "thumbnail plain jpeg");
     free(data);
     /* XOR 0x05 加密的 .dat（微信聊天图片）。 */
-    char dat[300];
+    char dat[1200];
     snprintf(dat, sizeof(dat), "%s/b.dat", base);
     uint8_t enc[16];
     for (int i = 0; i < 16; i++) enc[i] = (uint8_t)(jpeg_head[i] ^ 0x05);
-    write_file(dat, enc, sizeof(enc));
+    if (!write_file(dat, enc, sizeof(enc))) {
+        CHECK(0, "create encrypted JPEG fixture");
+        return;
+    }
     mime = NULL;
     data = NULL;
     len = 0;
@@ -292,9 +339,12 @@ static void test_im_thumbnail_preview(void) {
         free(data);
     }
     /* 非图片。 */
-    char txt[300];
+    char txt[1200];
     snprintf(txt, sizeof(txt), "%s/c.txt", base);
-    write_file(txt, "hello world, plain text", 23);
+    if (!write_file(txt, "hello world, plain text", 23)) {
+        CHECK(0, "create text preview fixture");
+        return;
+    }
     rc = cdc_im_thumbnail(txt, &mime, &data, &len, &e);
     CHECK(rc == 0, "thumbnail non-image -> 0");
     /* 预览：文本与二进制。 */
@@ -303,11 +353,14 @@ static void test_im_thumbnail_preview(void) {
               strstr(pv.text, "hello world") != NULL,
           "preview text file");
     cdc_im_preview_free(&pv);
-    char bin[300];
+    char bin[1200];
     snprintf(bin, sizeof(bin), "%s/d.bin", base);
     uint8_t bin_data[64];
     memset(bin_data, 0x01, sizeof(bin_data));
-    write_file(bin, bin_data, sizeof(bin_data));
+    if (!write_file(bin, bin_data, sizeof(bin_data))) {
+        CHECK(0, "create binary preview fixture");
+        return;
+    }
     CHECK(cdc_im_preview(bin, &pv, &e) == CDC_OK && pv.binary &&
               strstr(pv.text, "01 01 01") != NULL,
           "preview binary -> hex");
@@ -394,6 +447,18 @@ static void test_system_pure(void) {
 /* ---------------- privacy 扫描结构（空环境） ---------------- */
 
 static void test_privacy_scan_empty(void) {
+#ifdef _WIN32
+    char local[1024], roaming[1024];
+    if (!make_temp_dir(local, sizeof(local), L"cpl") ||
+        !make_temp_dir(roaming, sizeof(roaming), L"cpr")) {
+        CHECK(0, "create empty browser profile roots");
+        return;
+    }
+    auto saved_local = cdc::getenv_utf8("LOCALAPPDATA");
+    auto saved_roaming = cdc::getenv_utf8("APPDATA");
+    set_env("LOCALAPPDATA", local);
+    set_env("APPDATA", roaming);
+#endif
     std::vector<cdc::PrivacyItem> items = cdc::privacy_scan();
     size_t n = items.size();
     CHECK(items.size() == n, "privacy scan returns items");
@@ -405,6 +470,12 @@ static void test_privacy_scan_empty(void) {
         CHECK(items[i].id == want_ids[i],
               "privacy item %zu id %s (got %s)", i, want_ids[i], items[i].id.c_str());
     }
+#ifdef _WIN32
+    if (saved_local) set_env("LOCALAPPDATA", saved_local->c_str());
+    else set_env("LOCALAPPDATA", nullptr);
+    if (saved_roaming) set_env("APPDATA", saved_roaming->c_str());
+    else set_env("APPDATA", nullptr);
+#endif
 }
 
 /* ---------------- shred / recycle / process 的 Linux 降级 ---------------- */
@@ -419,7 +490,7 @@ static void test_linux_degradation(void) {
     mkdir(base, 0755);
     char f1[300];
     snprintf(f1, sizeof(f1), "%s/a.txt", base);
-    write_file(f1, "data", 4);
+    CHECK(write_file(f1, "data", 4), "create Linux degradation fixture");
     /* 粉碎：Linux 下不删文件，只计失败。 */
     cdc_shred_report_t rep;
     const char *paths[1] = { f1 };
@@ -467,8 +538,15 @@ int main(void) {
     set_env("ProgramData", "C:\\ProgramData");
     set_env("TEMP", "C:\\Users\\u\\AppData\\Local\\Temp");
     set_env("TMP", "C:\\Users\\u\\AppData\\Local\\Temp");
-    char tmpapp[256];
+    char tmpapp[1024];
+#ifdef _WIN32
+    if (!make_temp_dir(tmpapp, sizeof(tmpapp), L"cda")) {
+        printf("FAIL: create temporary app data directory\n");
+        return 1;
+    }
+#else
     snprintf(tmpapp, sizeof(tmpapp), "/tmp/cdc-test-slice3-app-%ld", (long)my_pid());
+#endif
 #ifndef _WIN32
     /* 让 LOCALAPPDATA 指向真实可写的 Linux 临时目录，供 logs 写日志；
      * 但 rules 的 allowlist 判定依赖 LOCALAPPDATA 的 Windows 形态值，
@@ -485,16 +563,13 @@ int main(void) {
     test_rules_update_no_url();
     test_rules_config();
     test_timeutil();
-    /* logs 成功路径需要可写的 LOCALAPPDATA：临时指向 /tmp。 */
+    /* logs 成功路径需要可写的 LOCALAPPDATA：临时指向刚创建的目录。 */
     {
-        char *saved = getenv("LOCALAPPDATA");
-        char *saved_copy = saved ? strdup(saved) : NULL;
+        auto saved = cdc::getenv_utf8("LOCALAPPDATA");
         set_env("LOCALAPPDATA", tmpapp);
         test_logs();
-        if (saved_copy) {
-            set_env("LOCALAPPDATA", saved_copy);
-            free(saved_copy);
-        }
+        if (saved) set_env("LOCALAPPDATA", saved->c_str());
+        else set_env("LOCALAPPDATA", nullptr);
     }
     test_im_classify();
     test_im_thumbnail_preview();
