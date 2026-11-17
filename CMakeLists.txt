@@ -142,7 +142,7 @@ endif()
 
 # ---------------- 自家后端：cdc_core（除 main.cpp 外的全部模块） ----------------
 add_library(cdc_core STATIC
-  src/util.cpp src/timeutil.cpp
+  src/util.cpp src/legacy_c.cpp src/timeutil.cpp
   src/mft_util.cpp src/bigfile.cpp src/mft_raw.cpp src/mft.cpp src/fastio.cpp
   src/sampling.cpp src/scan.cpp src/fileindex.cpp src/hashcache.cpp
   src/safety.cpp src/recycle.cpp src/privacy.cpp src/system.cpp src/rules.cpp

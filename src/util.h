@@ -1,174 +1,203 @@
-/* util.h — 基础层：动态数组、UTF-8/UTF-16 转换、日志、错误码。
- *
- * 架构契约（docs/ARCHITECTURE.md §2）：
- *   - 字符串内部一律 UTF-8，调 Win32 API 前再转 UTF-16（本文件提供转换，
- *     调用方负责 free）。
- *   - 动态数组只用这里的 growable array，不许手写 realloc 模板。
- *   - 函数返回 int，0=成功（CDC_OK），非 0=错误码；出错时填 cdc_err_t，
- *     不许静默吞错。
- *   - 日志写 %LOCALAPPDATA%\C盘清理工具\logs\（与 Rust 版 logs.rs 同目录）。
- *
- * 所有权约定：凡返回指针的函数（cdc_utf8_to_wide、cdc_wide_to_utf8、
- * cdc_buf_take*），返回的都是 malloc 的内存，调用方用 free() 释放；
- * 结构体内指针（cdc_buf_t.data / cdc_vec_t.data）一律用对应的
- * cdc_buf_free / cdc_vec_free 释放，调用方不得直接 free。
- */
-#ifndef CDC_UTIL_H
-#define CDC_UTIL_H
+// util.h — 基础层：错误码、UTF-8/UTF-16 转换、格式化、目录枚举、日志。
+//
+// 架构契约（docs/ARCHITECTURE.md §2，C++ 版）：
+//   - 字符串内部一律 UTF-8（std::string），调 Win32 API 前再转 UTF-16
+//     （std::wstring，本文件提供转换）。
+//   - 动态数组用 std::vector / std::string，资源用 RAII（raii.h），
+//     不手写 malloc/free。
+//   - 不用异常：函数返回 int，0 = 成功（kOk），非 0 = 错误码；出错时填
+//     cdc::Error，不许静默吞错。可能失败的取值返回 std::optional。
+//   - 日志写 %LOCALAPPDATA%\C盘清理工具\logs\（与 Rust 版 logs.rs 同目录）。
+#pragma once
 
-#include <stddef.h>
-#include <stdint.h>
-#include <wchar.h>
+#include <cstdarg>
+#include <cstddef>
+#include <cstdint>
+#include <cwchar>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <type_traits>
+#include <utility>
+#include <vector>
 
-#ifdef __cplusplus
-extern "C" {
+#if defined(__GNUC__) || defined(__clang__)
+#define CDC_PRINTF_FMT(fmt_idx, arg_idx) __attribute__((format(printf, fmt_idx, arg_idx)))
+#else
+#define CDC_PRINTF_FMT(fmt_idx, arg_idx)
 #endif
 
-#define CDC_OK 0
+namespace cdc {
 
-/* ---------------- 错误码 ---------------- */
+// ---------------- 错误码 ----------------
 
-/* 错误码表。CDC_ERR_OK 与 CDC_OK 同值 0。 */
-enum cdc_err_code {
-    CDC_ERR_OK          = 0,  /* 无错 */
-    CDC_ERR_NOMEM       = 1,  /* 内存分配失败 */
-    CDC_ERR_INVALID_ARG = 2,  /* 参数非法（NULL、越界、空串、非法文件名） */
-    CDC_ERR_IO          = 3,  /* 文件 / 系统 I/O 失败 */
-    CDC_ERR_NOT_FOUND   = 4,  /* 文件 / 项不存在 */
-    CDC_ERR_OVERFLOW    = 5,  /* 长度 / 容量溢出 */
-    CDC_ERR_UTF8        = 6,  /* 非法 UTF-8 序列 */
-    CDC_ERR_UTF16       = 7,  /* 非法 UTF-16 序列（孤立代理对等） */
-    CDC_ERR_WIN32       = 8,  /* Win32 API 失败（message 里带 GetLastError 码） */
-    CDC_ERR_EXISTS      = 9   /* 目标已存在 */
+inline constexpr int kOk = 0;
+
+enum ErrCode : int {
+    kErrOk = 0,          // 无错
+    kErrNoMem = 1,       // 内存分配失败
+    kErrInvalidArg = 2,  // 参数非法（空指针、越界、空串、非法文件名）
+    kErrIo = 3,          // 文件 / 系统 I/O 失败
+    kErrNotFound = 4,    // 文件 / 项不存在
+    kErrOverflow = 5,    // 长度 / 容量溢出
+    kErrUtf8 = 6,        // 非法 UTF-8 序列
+    kErrUtf16 = 7,       // 非法 UTF-16 序列
+    kErrWin32 = 8,       // Win32 API 失败（message 里带 GetLastError 码）
+    kErrExists = 9,      // 目标已存在
 };
 
-/* 码 + 一句话（UTF-8，NUL 结尾）。无错时 code=0 且 message 为空串。 */
-typedef struct {
-    int  code;
-    char message[256];
-} cdc_err_t;
+// 码 + 一句话（UTF-8）。无错时 code == kOk 且 message 为空串。
+// message 定长 256 字节（与 C 版一致：前端看到的错误文案截断规则不变）。
+struct Error {
+    int code = kOk;
+    char message[256] = {};
 
-void        cdc_err_init(cdc_err_t *err);
-void        cdc_err_set(cdc_err_t *err, int code, const char *fmt, ...);
-const char *cdc_err_str(int code); /* 静态字符串，如 "out of memory" */
+    bool ok() const { return code == kOk; }
+    void clear() {
+        code = kOk;
+        message[0] = '\0';
+    }
+};
 
-/* ---------------- 动态字节缓冲 ---------------- */
+// 允许 err 为空指针（调用方不关心错误详情时传 nullptr）。
+void err_init(Error *err);
+void err_set(Error *err, int code, const char *fmt, ...) CDC_PRINTF_FMT(3, 4);
+void err_vset(Error *err, int code, const char *fmt, va_list ap);
+const char *err_str(int code);  // 静态字符串，如 "out of memory"
 
-typedef struct {
-    uint8_t *data; /* malloc 的缓冲；用 cdc_buf_free 释放，不得直接 free */
-    size_t   len;  /* 已用字节数（不含结尾 NUL） */
-    size_t   cap;  /* 已分配字节数 */
-} cdc_buf_t;
+// ---------------- 字符串 ----------------
 
-void cdc_buf_init(cdc_buf_t *b);
-void cdc_buf_free(cdc_buf_t *b);                 /* 释放后回到 init 状态 */
-void cdc_buf_clear(cdc_buf_t *b);                /* len=0，保留 cap */
-int  cdc_buf_reserve(cdc_buf_t *b, size_t extra); /* 保证 cap >= len + extra */
-int  cdc_buf_append(cdc_buf_t *b, const void *p, size_t n);
-int  cdc_buf_push(cdc_buf_t *b, uint8_t byte);
-int  cdc_buf_append_str(cdc_buf_t *b, const char *s); /* 追加 NUL 结尾串（不含 NUL） */
-/* 交出所有权：返回 data，b 重置为 init 状态；失败返回 NULL 且 b 不变。 */
-uint8_t *cdc_buf_take(cdc_buf_t *b);
-/* 同上，但先补一个 NUL 结尾再交出（返回 char*，可直接当 C 字符串用）。 */
-char *cdc_buf_take_cstr(cdc_buf_t *b);
+// printf 风格格式化到 std::string（不截断）。
+std::string format(const char *fmt, ...) CDC_PRINTF_FMT(1, 2);
+std::string vformat(const char *fmt, va_list ap);
 
-/* ---------------- 通用动态数组 ---------------- */
+// 追加一个码点的 UTF-8 编码（调用方保证 cp 合法：非代理区且 <= U+10FFFF）。
+void append_utf8(std::string &out, uint32_t cp);
 
-typedef struct {
-    void  *data;      /* 元素数组；用 cdc_vec_free 释放，不得直接 free */
-    size_t len;       /* 元素个数 */
-    size_t cap;       /* 已分配元素个数 */
-    size_t elem_size; /* 每个元素字节数，init 时固定 */
-} cdc_vec_t;
-
-/* elem_size==0 返回 CDC_ERR_INVALID_ARG。 */
-int   cdc_vec_init(cdc_vec_t *v, size_t elem_size);
-void  cdc_vec_free(cdc_vec_t *v);                /* 释放后回到 init 状态 */
-void  cdc_vec_clear(cdc_vec_t *v);               /* len=0，保留 cap */
-int   cdc_vec_reserve(cdc_vec_t *v, size_t extra); /* 保证 cap >= len + extra */
-int   cdc_vec_push(cdc_vec_t *v, const void *elem); /* 按值拷入 elem_size 字节 */
-int   cdc_vec_pop(cdc_vec_t *v, void *out);      /* 弹出末尾元素拷到 out（可 NULL）；空返回 CDC_ERR_INVALID_ARG */
-/* 越界返回 NULL（带边界检查）。 */
-void *cdc_vec_get(cdc_vec_t *v, size_t i);
-/* 不带检查的下标访问：调用前自行保证 i < len。 */
-#define CDC_VEC_AT(v, T, i) (((T *)(v)->data)[(i)])
-
-/* ---------------- UTF-8 / 宽字符转换 ---------------- */
-
-/* UTF-8 -> 宽串。Windows 上 wchar_t 是 UTF-16 码元，Linux 上是 UTF-32 码点；
- * 两种平台对合法输入的转换都是精确的。返回 malloc 的 NUL 结尾宽串，
- * 调用方 free()；非法 UTF-8（截断、超长编码、代理区码点、>U+10FFFF）
- * 返回 NULL。空串返回指向单个 NUL 的分配（非 NULL）。 */
-wchar_t *cdc_utf8_to_wide(const char *utf8);
-
-/* 宽串 -> UTF-8。返回 malloc 的 NUL 结尾 UTF-8 串，调用方 free()；
- * 孤立代理对 / 超范围码点按 U+FFFD 处理（与 Rust from_utf16_lossy
- * 同策略）。NULL 输入返回 NULL。 */
-char *cdc_wide_to_utf8(const wchar_t *wide);
-
-/* ---------------- 目录枚举 ---------------- */
-
-/* 单目录枚举回调：name 为 UTF-8 文件名（不含路径，仅在回调期间有效，
- * 要保留请自行拷贝）；is_dir；is_symlink（Windows 上指重解析点，
- * POSIX 上指符号链接）；size（目录/链接为 0）；mtime 为 Unix 秒
- * （取不到为 0）；attrs 在 Windows 上是 dwFileAttributes，POSIX 上
- * 是 st_mode。返回 0 继续，非 0 立即停止（该值原样返回给调用方）。 */
-typedef int (*cdc_dir_entry_fn)(const char *name, int is_dir, int is_symlink,
-                                uint64_t size, uint64_t mtime, uint32_t attrs,
-                                void *ctx);
-
-/* 枚举 dir 的直接子项（不含 "." ".."，不递归）。Windows 用
- * NtQueryDirectoryFile + 64KB 缓冲批量取（一次系统调用取多项，
- * 替代 FindFirstFileW/FindNextFileW 的逐项调用）；POSIX 用
- * opendir/readdir + lstat（与旧代码同语义）。
- * 返回 CDC_OK（零项也是 OK）；目录不存在返回 CDC_ERR_NOT_FOUND；
- * 其它打不开的情况返回 CDC_ERR_IO；回调返回的非 0 值原样返回。 */
-int cdc_enum_dir(const char *dir, cdc_dir_entry_fn cb, void *ctx);
-
-/* ---- 内部测试钩子 ---- */
-
-/* 解析一包 FILE_DIRECTORY_INFORMATION（buf 长 n 字节），对每个非
- * "." ".." 的项调 cb。name 在一次调用内有效（复用的划痕缓冲 scratch）。
- * 供测试直接调用（覆盖 Windows 枚举最容易出错的链式遍历与 UTF-16LE
- * 解码）；生产代码只经 cdc_enum_dir 走它。buf 损坏（越界/截断）
- * 返回 CDC_ERR_IO；回调的非 0 返回值原样返回。 */
-int cdc_direnum_parse_batch(const uint8_t *buf, size_t n, cdc_dir_entry_fn cb,
-                            void *ctx, cdc_buf_t *scratch);
-
-/* ---------------- 日志 ---------------- */
-
-typedef enum {
-    CDC_LOG_DEBUG = 0,
-    CDC_LOG_INFO  = 1,
-    CDC_LOG_WARN  = 2,
-    CDC_LOG_ERROR = 3
-} cdc_log_level_t;
-
-void            cdc_log_set_level(cdc_log_level_t level); /* 默认 INFO */
-cdc_log_level_t cdc_log_get_level(void);
-/* 写一行日志：stderr + 日志文件（见下）。低于当前级别的调用直接丢弃。
- * 写日志文件失败不报错、不影响调用方（best-effort）。 */
-void cdc_log(cdc_log_level_t level, const char *fmt, ...);
-
-/* 日志目录：%LOCALAPPDATA%\C盘清理工具\logs\（与 Rust logs.rs 同规则；
- * LOCALAPPDATA 未设置时退回可执行文件所在目录）。目录不存在则创建。
- * out 由调用方提供；成功返回 CDC_OK，cap 不足返回 CDC_ERR_OVERFLOW，
- * 目录无法确定/创建返回 CDC_ERR_IO。 */
-int cdc_log_dir(char *out, size_t cap);
-
-/* 缓存目录：%LOCALAPPDATA%\C盘清理工具\mftcache\（与 Rust cache_dir() 同规则；
- * LOCALAPPDATA 未设置时退回可执行文件所在目录，再退回 "."）。目录不存在则创建。
- * 返回 malloc'd 字符串，调用方 free；失败返回 NULL。
- * 唯一实现在这里；mft.h / logs.h 的同名声明只是复用同一原型（不要另写实现）。 */
-char *cdc_cache_dir(void);
-
-/* 覆盖日志文件名（仅文件名，不含路径；不许含 '/'、'\\' 或 ".."，否则
- * 返回 CDC_ERR_INVALID_ARG 且保持原值）。默认文件名是 cdc-YYYYMMDD.log
- *（按本地日期每天一个文件）；调用方可改为固定名，如 index-20261117.log。 */
-int cdc_log_set_file(const char *filename);
-
-#ifdef __cplusplus
+// 容量检查版 reserve：size()+extra 溢出或超过 max_size() 时返回 kErrOverflow，
+// 否则 reserve 并返回 kOk。不用异常，供处理磁盘/网络给出的长度时防御溢出。
+template <class Container>
+int checked_reserve(Container &c, size_t extra) {
+    if (extra > c.max_size() || c.size() > c.max_size() - extra) return kErrOverflow;
+    c.reserve(c.size() + extra);
+    return kOk;
 }
-#endif
 
-#endif /* CDC_UTIL_H */
+// 带边界检查的元素指针：越界返回 nullptr。
+template <class T>
+T *ptr_at(std::vector<T> &v, size_t i) {
+    return i < v.size() ? &v[i] : nullptr;
+}
+template <class T>
+const T *ptr_at(const std::vector<T> &v, size_t i) {
+    return i < v.size() ? &v[i] : nullptr;
+}
+
+// UTF-8 -> 宽串。Windows 上 wchar_t 是 UTF-16 码元，Linux 上是 UTF-32 码点；
+// 两种平台对合法输入的转换都是精确的。空指针或非法 UTF-8（截断、超长编码、
+// 代理区码点、>U+10FFFF）返回 nullopt；空串返回空 wstring。
+std::optional<std::wstring> utf8_to_wide(const char *utf8);
+inline std::optional<std::wstring> utf8_to_wide(const std::string &utf8) {
+    return utf8_to_wide(utf8.c_str());
+}
+
+// 宽串 -> UTF-8。孤立代理对 / 超范围码点按 U+FFFD 处理（与 Rust
+// from_utf16_lossy 同策略）。空指针返回 nullopt。
+std::optional<std::string> wide_to_utf8(const wchar_t *wide);
+inline std::optional<std::string> wide_to_utf8(const std::wstring &wide) {
+    return wide_to_utf8(wide.c_str());
+}
+
+// 空指针安全的 C 串视图（nullptr -> 空视图）。
+inline std::string_view sv(const char *s) { return s ? std::string_view(s) : std::string_view(); }
+
+// ---------------- FunctionRef：不拥有的轻量回调引用 ----------------
+//
+// 替代 C 版的 "函数指针 + void *ctx"：可绑定 lambda / 函数，不分配内存，
+// 不依赖 <functional>。被引用的可调用对象必须活到调用结束。
+// 默认构造为空（operator bool 为 false），供 "回调可选" 的接口使用。
+template <class Sig>
+class FunctionRef;
+
+template <class R, class... Args>
+class FunctionRef<R(Args...)> {
+public:
+    FunctionRef() = default;
+    FunctionRef(std::nullptr_t) {}
+    template <class F,
+              class = std::enable_if_t<!std::is_same_v<std::decay_t<F>, FunctionRef> &&
+                                       std::is_invocable_r_v<R, F &, Args...>>>
+    FunctionRef(F &&f)  // NOLINT(google-explicit-constructor)
+        : obj_(const_cast<void *>(static_cast<const void *>(&f))),
+          call_([](void *obj, Args... args) -> R {
+              return (*static_cast<std::remove_reference_t<F> *>(obj))(
+                  std::forward<Args>(args)...);
+          }) {}
+
+    explicit operator bool() const { return call_ != nullptr; }
+    R operator()(Args... args) const { return call_(obj_, std::forward<Args>(args)...); }
+
+private:
+    void *obj_ = nullptr;
+    R (*call_)(void *, Args...) = nullptr;
+};
+
+// ---------------- 目录枚举 ----------------
+
+// 单目录枚举项：name 为 UTF-8 文件名（不含路径，仅在回调期间有效）；
+// is_symlink 在 Windows 上指重解析点，POSIX 上指符号链接；size（目录/链接为 0）；
+// mtime 为 Unix 秒（取不到为 0）；attrs 在 Windows 上是 dwFileAttributes，
+// POSIX 上是 st_mode。
+struct DirEntry {
+    std::string_view name;
+    bool is_dir = false;
+    bool is_symlink = false;
+    uint64_t size = 0;
+    uint64_t mtime = 0;
+    uint32_t attrs = 0;
+};
+
+// 回调返回 0 继续，非 0 立即停止（该值原样返回给调用方）。
+using DirEntryFn = FunctionRef<int(const DirEntry &)>;
+
+// 枚举 dir 的直接子项（不含 "." ".."，不递归）。Windows 用
+// NtQueryDirectoryFile + 64KB 缓冲批量取；POSIX 用 opendir/readdir + lstat。
+// 返回 kOk（零项也是 OK）；目录不存在返回 kErrNotFound；其它打不开的情况
+// 返回 kErrIo；dir 为空指针或 cb 为空返回 kErrInvalidArg；回调的非 0 值原样返回。
+int enum_dir(const char *dir, DirEntryFn cb);
+inline int enum_dir(const std::string &dir, DirEntryFn cb) { return enum_dir(dir.c_str(), cb); }
+
+// 内部测试钩子：解析一包 FILE_DIRECTORY_INFORMATION（buf 长 n 字节），对每个
+// 非 "." ".." 的项调 cb。scratch 是复用的名字缓冲。buf 损坏（越界/截断）返回
+// kErrIo；回调的非 0 返回值原样返回。
+int direnum_parse_batch(const uint8_t *buf, size_t n, DirEntryFn cb, std::string &scratch);
+
+// ---------------- 日志 ----------------
+
+enum class LogLevel : int { Debug = 0, Info = 1, Warn = 2, Error = 3 };
+
+void log_set_level(LogLevel level);  // 默认 Info
+LogLevel log_get_level();
+
+// 写一行日志：stderr + 日志文件。低于当前级别的调用直接丢弃。
+// 写日志文件失败不报错、不影响调用方（best-effort）。
+void log(LogLevel level, const char *fmt, ...) CDC_PRINTF_FMT(2, 3);
+
+// 日志目录：%LOCALAPPDATA%\C盘清理工具\logs（LOCALAPPDATA 未设置时退回
+// 可执行文件所在目录）。目录不存在则创建；结果在进程内缓存。
+// 无法确定/创建时返回 nullopt。
+std::optional<std::string> log_dir();
+
+// 缓存目录：%LOCALAPPDATA%\C盘清理工具\mftcache（规则同上，再退回 "."）。
+// 目录不存在则创建。唯一实现在这里。
+std::optional<std::string> cache_dir();
+
+// 覆盖日志文件名（仅文件名；空串、含 '/'、'\\' 或 ".."、或长度 >= 256
+// 返回 kErrInvalidArg 且保持原值）。默认文件名 cdc-YYYYMMDD.log。
+int log_set_file(std::string_view filename);
+
+}  // namespace cdc
+
+// TRANSITIONAL：尚未迁移的模块仍用 C 版接口（cdc_buf_t / cdc_log 等），
+// 由 legacy_c.h 以 cdc:: 新接口实现。最后一个模块迁移完后删除。
+#include "legacy_c.h"

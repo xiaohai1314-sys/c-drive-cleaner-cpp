@@ -37,3 +37,16 @@
 #include <wchar.h>
 
 #include "mimalloc-override.h"
+
+/* TRANSITIONAL（C++ 迁移期）：自家 C++ 翻译单元也 -include 本文件时，
+ * 标准库头里的 std::malloc / std::free 等会被宏改写成 std::mi_*；
+ * 把 mi_* 引入 std 命名空间让这些调用仍可解析。迁移完成后自家 C++ 代码
+ * 不再 -include 本文件（只剩 sqlite3.c / cJSON.c 用），本段随之无用。 */
+#ifdef __cplusplus
+namespace std {
+using ::mi_calloc;
+using ::mi_free;
+using ::mi_malloc;
+using ::mi_realloc;
+}  // namespace std
+#endif
