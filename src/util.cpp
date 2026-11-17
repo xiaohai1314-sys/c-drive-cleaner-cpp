@@ -514,7 +514,7 @@ int enum_dir(const char *dir, DirEntryFn cb) {
                       static_cast<ULONG>(buf.size()), 1 /* FileDirectoryInformation */, FALSE,
                       nullptr, restart);
         restart = FALSE;
-        if (static_cast<uint32_t>(st) == 0xC0000018u) break;  // STATUS_NO_MORE_FILES
+        if (static_cast<uint32_t>(st) == 0x80000006u) break;  // STATUS_NO_MORE_FILES
         if (st != 0) return kErrIo;
         if (iosb.Information == 0) break;  // 防御：成功但零字节
         int rc = direnum_parse_batch(buf.data(), static_cast<size_t>(iosb.Information), cb, scratch);
