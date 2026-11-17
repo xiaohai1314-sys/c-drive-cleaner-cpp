@@ -23,6 +23,9 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include <string>
+#include <vector>
+
 #include "im.h"
 #include "logs.h"
 #include "privacy.h"
@@ -428,15 +431,12 @@ static void test_linux_degradation(void) {
     if (chk) fclose(chk);
     cdc_shred_report_free(&rep);
     /* 回收站：Linux 下全部失败，不做永久删除。 */
-    char **failed = NULL;
-    size_t nfailed = 0;
-    CHECK(cdc_send_to_recycle(paths, 1, &failed, &nfailed, &e) == CDC_OK,
-          "recycle rc ok");
-    CHECK(nfailed == 1, "recycle linux all failed");
+    std::vector<std::string> failed = cdc::send_to_recycle(paths);
+    CHECK(failed.size() == 1 && failed[0] == f1, "recycle failed list names the file");
+    CHECK(failed.size() == 1, "recycle linux all failed");
     chk = fopen(f1, "r");
     CHECK(chk != NULL, "recycle linux leaves file");
     if (chk) fclose(chk);
-    cdc_strvec_free(failed, nfailed);
     /* 进程：空集 + 0 杀。 */
     char **running = NULL;
     size_t nrun = 0;

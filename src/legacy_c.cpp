@@ -349,3 +349,21 @@ int cdc_rename_directory_sibling_checked(const char *from, const char *to, const
     return cdc::rename_directory_sibling_checked(from, to, roots_of(roots, n), err);
 }
 int cdc_remove_empty_dirs(const char *root) { return cdc::remove_empty_dirs(root); }
+
+// ---- recycle 转发 ----
+#include "recycle.h"
+
+int cdc_send_to_recycle(const char **paths, size_t npaths, char ***out_failed,
+                        size_t *out_nfailed, cdc_err_t *err) {
+    cdc::err_init(err);
+    if (!out_failed || !out_nfailed) {
+        cdc::err_set(err, CDC_ERR_INVALID_ARG, "NULL out param");
+        return CDC_ERR_INVALID_ARG;
+    }
+    std::vector<std::string> failed =
+        cdc::send_to_recycle(std::span<const char *const>(paths, paths ? npaths : 0));
+    *out_nfailed = failed.size();
+    *out_failed = (char **)calloc(failed.size() ? failed.size() : 1, sizeof(char *));
+    for (size_t i = 0; *out_failed && i < failed.size(); i++) (*out_failed)[i] = dup_c(failed[i]);
+    return CDC_OK;
+}

@@ -132,3 +132,7 @@ int cdc_rename_directory_sibling_checked(const char *from, const char *to,
                                          const char **allowed_roots, size_t nroots,
                                          cdc_err_t *err);
 int cdc_remove_empty_dirs(const char *root);
+
+// ---- recycle ----
+int cdc_send_to_recycle(const char **paths, size_t npaths, char ***out_failed,
+                        size_t *out_nfailed, cdc_err_t *err);
