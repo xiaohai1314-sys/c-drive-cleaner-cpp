@@ -452,7 +452,7 @@ bool backup_key(const char *hive, const std::string &path, const char *label) {
     if (reg_exe.empty()) reg_exe = "reg.exe";
     std::string args = std::string("export \"") + hive + "\\" + path + "\" \"" + file + "\" /y";
     long code = -1;
-    int rc = cdc_run_command(reg_exe.c_str(), args.c_str(), 0, nullptr, nullptr, &code, nullptr);
+    int rc = run_command(reg_exe, args, false, nullptr, nullptr, &code, nullptr);
     return rc == kOk && code == 0;
 }
 

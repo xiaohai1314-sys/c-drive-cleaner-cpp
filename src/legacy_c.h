@@ -187,3 +187,13 @@ void cdc_shred_report_free(cdc_shred_report_t *r);
 void cdc_shred_set_hooks(const cdc_hooks_t *hooks);
 int cdc_shred_paths(const char **paths, size_t npaths, uint32_t passes,
                     cdc_shred_report_t *out, cdc_err_t *err);
+
+// ---- process ----
+int cdc_running_processes(char ***out_names, size_t *out_n, cdc_err_t *err);
+int cdc_check_running(const char **targets, size_t ntargets,
+                      char ***out_running, size_t *out_n, cdc_err_t *err);
+int cdc_kill_process_by_name(const char *target_name, size_t *out_killed,
+                             cdc_err_t *err);
+int cdc_run_command(const char *exe, const char *args, int capture,
+                    char **out_stdout, char **out_stderr, long *exit_code,
+                    cdc_err_t *err);

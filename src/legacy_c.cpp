@@ -11,6 +11,7 @@
 #include "timeutil.h"
 #include "logs.h"
 #include "shred.h"
+#include "cdc_process.h"
 
 void cdc_err_init(cdc_err_t *err) { cdc::err_init(err); }
 void cdc_err_set(cdc_err_t *err, int code, const char *fmt, ...) {
@@ -525,4 +526,113 @@ int cdc_shred_paths(const char **paths, size_t npaths, uint32_t passes,
         out->nerrors = rep.errors.size();
     }
     return CDC_OK;
+}
+
+// ---- process 转发 ----
+int cdc_running_processes(char ***out_names, size_t *out_n, cdc_err_t *err) {
+    if (!out_names || !out_n) {
+        cdc::err_set(err, CDC_ERR_INVALID_ARG, "NULL out param");
+        return CDC_ERR_INVALID_ARG;
+    }
+    *out_names = NULL;
+    *out_n = 0;
+    std::vector<std::string> v;
+    int rc = cdc::running_processes(&v, err);
+    if (rc != CDC_OK)
+        return rc;
+    auto *a = (char **)malloc(v.size() * sizeof(char *));
+    if (!a && !v.empty()) {
+        cdc::err_set(err, CDC_ERR_NOMEM, "out of memory");
+        return CDC_ERR_NOMEM;
+    }
+    for (size_t i = 0; i < v.size(); ++i) {
+        a[i] = dup_c(v[i]);
+        if (!a[i]) {
+            for (size_t j = 0; j < i; ++j)
+                free(a[j]);
+            free(a);
+            cdc::err_set(err, CDC_ERR_NOMEM, "out of memory");
+            return CDC_ERR_NOMEM;
+        }
+    }
+    *out_names = a;
+    *out_n = v.size();
+    return CDC_OK;
+}
+int cdc_check_running(const char **targets, size_t ntargets,
+                      char ***out_running, size_t *out_n, cdc_err_t *err) {
+    if (!out_running || !out_n) {
+        cdc::err_set(err, CDC_ERR_INVALID_ARG, "NULL out param");
+        return CDC_ERR_INVALID_ARG;
+    }
+    *out_running = NULL;
+    *out_n = 0;
+    std::vector<std::string> t;
+    t.reserve(ntargets);
+    for (size_t i = 0; i < ntargets; i++)
+        t.emplace_back(targets && targets[i] ? targets[i] : "");
+    std::vector<std::string> v;
+    int rc = cdc::check_running(t, &v, err);
+    if (rc != CDC_OK)
+        return rc;
+    auto *a = (char **)malloc(v.size() * sizeof(char *));
+    if (!a && !v.empty()) {
+        cdc::err_set(err, CDC_ERR_NOMEM, "out of memory");
+        return CDC_ERR_NOMEM;
+    }
+    for (size_t i = 0; i < v.size(); ++i) {
+        a[i] = dup_c(v[i]);
+        if (!a[i]) {
+            for (size_t j = 0; j < i; ++j)
+                free(a[j]);
+            free(a);
+            cdc::err_set(err, CDC_ERR_NOMEM, "out of memory");
+            return CDC_ERR_NOMEM;
+        }
+    }
+    *out_running = a;
+    *out_n = v.size();
+    return CDC_OK;
+}
+int cdc_kill_process_by_name(const char *target_name, size_t *out_killed,
+                             cdc_err_t *err) {
+    if (!target_name) {
+        cdc::err_set(err, CDC_ERR_INVALID_ARG, "target_name is NULL");
+        return CDC_ERR_INVALID_ARG;
+    }
+    return cdc::kill_process_by_name(target_name, out_killed, err);
+}
+int cdc_run_command(const char *exe, const char *args, int capture,
+                    char **out_stdout, char **out_stderr, long *exit_code,
+                    cdc_err_t *err) {
+    if (out_stdout) *out_stdout = NULL;
+    if (out_stderr) *out_stderr = NULL;
+    if (exit_code) *exit_code = -1;
+    if (!exe) {
+        cdc::err_set(err, CDC_ERR_INVALID_ARG, "exe is NULL");
+        return CDC_ERR_INVALID_ARG;
+    }
+    std::string so, se;
+    int rc = cdc::run_command(exe, args ? args : "", capture != 0,
+                              out_stdout ? &so : nullptr,
+                              out_stderr ? &se : nullptr, exit_code, err);
+    if (rc == CDC_OK) {
+        if (out_stdout) {
+            *out_stdout = dup_c(so);
+            if (!*out_stdout) {
+                cdc::err_set(err, CDC_ERR_NOMEM, "out of memory");
+                return CDC_ERR_NOMEM;
+            }
+        }
+        if (out_stderr) {
+            *out_stderr = dup_c(se);
+            if (!*out_stderr) {
+                free(*out_stdout);
+                if (out_stdout) *out_stdout = NULL;
+                cdc::err_set(err, CDC_ERR_NOMEM, "out of memory");
+                return CDC_ERR_NOMEM;
+            }
+        }
+    }
+    return rc;
 }

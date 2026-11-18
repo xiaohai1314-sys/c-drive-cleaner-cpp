@@ -501,16 +501,14 @@ static void test_linux_degradation(void) {
     CHECK(chk != NULL, "recycle linux leaves file");
     if (chk) fclose(chk);
     /* 进程：空集 + 0 杀。 */
-    char **running = NULL;
-    size_t nrun = 0;
-    const char *t[1] = { "nonexistent-xyz.exe" };
-    CHECK(cdc_check_running(t, 1, &running, &nrun, &e) == CDC_OK && nrun == 0,
+    const std::string t[1] = {"nonexistent-xyz.exe"};
+    std::vector<std::string> running;
+    CHECK(cdc::check_running(t, &running, &e) == cdc::kOk && running.empty(),
           "check_running empty on linux");
-    cdc_strvec_free(running, nrun);
     size_t killed = 99;
-    CHECK(cdc_kill_process_by_name("nonexistent-xyz.exe", &killed, &e) == CDC_OK && killed == 0,
+    CHECK(cdc::kill_process_by_name("nonexistent-xyz.exe", &killed, &e) == cdc::kOk && killed == 0,
           "kill nonexistent -> 0");
-    CHECK(cdc_run_command("cmd.exe", "/c echo hi", 0, NULL, NULL, NULL, &e) == CDC_ERR_IO,
+    CHECK(cdc::run_command("cmd.exe", "/c echo hi", false, nullptr, nullptr, nullptr, &e) == cdc::kErrIo,
           "run_command linux -> IO error");
     snprintf(cmd, sizeof(cmd), "rm -rf %s", base);
     { int rc = system(cmd); (void)rc; }
