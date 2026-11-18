@@ -1,9 +1,7 @@
 /* timeutil.cpp — 移植自 Rust 版 desktop/src/timeutil.rs。 */
 #include "timeutil.h"
 
-#include <stdlib.h>
-#include <string.h>
-#include <time.h>
+#include <ctime>
 
 #include "util.h"
 
@@ -11,13 +9,16 @@
 #include <windows.h>
 #endif
 
-static void write_two_digits(char *out, unsigned value) {
+namespace cdc {
+namespace {
+
+void write_two_digits(char *out, unsigned value) {
     if (value > 99) value = 99;
     out[0] = (char)('0' + value / 10);
     out[1] = (char)('0' + value % 10);
 }
 
-static void write_four_digits(char *out, unsigned value) {
+void write_four_digits(char *out, unsigned value) {
     if (value > 9999) value = 9999;
     out[0] = (char)('0' + (value / 1000) % 10);
     out[1] = (char)('0' + (value / 100) % 10);
@@ -25,9 +26,10 @@ static void write_four_digits(char *out, unsigned value) {
     out[3] = (char)('0' + value % 10);
 }
 
-cdc_local_time_t cdc_local_time(uint64_t seconds) {
-    cdc_local_time_t out;
-    memset(&out, 0, sizeof(out));
+}  // namespace
+
+LocalTime local_time(uint64_t seconds) {
+    LocalTime out{};
 #ifdef _WIN32
     /* FILETIME 从 1601-01-01 起算，单位 100ns（与 Rust 版逐行一致，
      * saturating 语义：溢出钳到 u64 最大值）。 */
@@ -66,22 +68,18 @@ cdc_local_time_t cdc_local_time(uint64_t seconds) {
 #endif
 }
 
-char *cdc_month_label(uint64_t seconds) {
-    cdc_local_time_t t = cdc_local_time(seconds);
-    char *out = (char *)malloc(8);
-    if (!out) return NULL;
-    if (t.year == 0) {
-        memcpy(out, "1970-01", 8);
-        return out;
-    }
+std::string month_label(uint64_t seconds) {
+    LocalTime t = local_time(seconds);
+    if (t.year == 0) return "1970-01";
+    char out[8];
     write_four_digits(out, t.year);
     out[4] = '-';
     write_two_digits(out + 5, t.month);
     out[7] = '\0';
-    return out;
+    return std::string(out, 7);
 }
 
-char *cdc_stamp(void) {
+std::string stamp() {
     uint64_t seconds;
 #ifdef _WIN32
     FILETIME ft;
@@ -94,9 +92,8 @@ char *cdc_stamp(void) {
 #else
     seconds = (uint64_t)time(NULL);
 #endif
-    cdc_local_time_t t = cdc_local_time(seconds);
-    char *out = (char *)malloc(16);
-    if (!out) return NULL;
+    LocalTime t = local_time(seconds);
+    char out[16];
     write_four_digits(out, t.year);
     write_two_digits(out + 4, t.month);
     write_two_digits(out + 6, t.day);
@@ -105,13 +102,12 @@ char *cdc_stamp(void) {
     write_two_digits(out + 11, t.minute);
     write_two_digits(out + 13, t.second);
     out[15] = '\0';
-    return out;
+    return std::string(out, 15);
 }
 
-char *cdc_human_stamp(uint64_t seconds) {
-    cdc_local_time_t t = cdc_local_time(seconds);
-    char *out = (char *)malloc(20);
-    if (!out) return NULL;
+std::string human_stamp(uint64_t seconds) {
+    LocalTime t = local_time(seconds);
+    char out[20];
     write_four_digits(out, t.year);
     out[4] = '-';
     write_two_digits(out + 5, t.month);
@@ -124,5 +120,7 @@ char *cdc_human_stamp(uint64_t seconds) {
     out[16] = ':';
     write_two_digits(out + 17, t.second);
     out[19] = '\0';
-    return out;
+    return std::string(out, 19);
 }
+
+}  // namespace cdc

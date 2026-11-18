@@ -6,6 +6,7 @@
 #include <cstring>
 
 #include "util.h"
+#include "timeutil.h"
 
 void cdc_err_init(cdc_err_t *err) { cdc::err_init(err); }
 void cdc_err_set(cdc_err_t *err, int code, const char *fmt, ...) {
@@ -367,3 +368,19 @@ int cdc_send_to_recycle(const char **paths, size_t npaths, char ***out_failed,
     for (size_t i = 0; *out_failed && i < failed.size(); i++) (*out_failed)[i] = dup_c(failed[i]);
     return CDC_OK;
 }
+
+// ---- timeutil 转发 ----
+cdc_local_time_t cdc_local_time(uint64_t seconds) {
+    cdc::LocalTime t = cdc::local_time(seconds);
+    cdc_local_time_t out;
+    out.year = t.year;
+    out.month = t.month;
+    out.day = t.day;
+    out.hour = t.hour;
+    out.minute = t.minute;
+    out.second = t.second;
+    return out;
+}
+char *cdc_month_label(uint64_t seconds) { return dup_c(cdc::month_label(seconds)); }
+char *cdc_stamp(void) { return dup_c(cdc::stamp()); }
+char *cdc_human_stamp(uint64_t seconds) { return dup_c(cdc::human_stamp(seconds)); }

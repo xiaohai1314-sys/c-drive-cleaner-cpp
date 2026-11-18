@@ -1,18 +1,10 @@
-/* test_slice3.c — 切片 3 其余模块的纯逻辑自测（rules / timeutil /
+/* test_slice3.cpp — 切片 3 其余模块的纯逻辑自测（rules / timeutil /
  * logs / im 分类与预览 / system 纯函数 / shred 与 recycle 的
  * Linux 降级行为 / process 空集）。
  *
- *   gcc -O2 -std=c11 -Wall -Wextra -Werror -Isrc -Ithird_party/sqlite3 \
- *       -Ithird_party/cjson -pthread -o build/test_slice3 \
- *       tests/test_slice3.c src/rules.c src/timeutil.c src/logs.c \
- *       src/im.c src/system.c src/privacy.c src/shred.c src/recycle.c \
- *       src/process.c src/safety.c src/util.c \
- *       third_party/sqlite3/sqlite3.c third_party/cjson/cJSON.c \
- *       -ladvapi32 -lshell32 -lwinhttp -lbcrypt   (仅 Windows 交叉时)
- *   ./build/test_slice3    # 退出码 0=全过
- *                          #（内置 rules.json 是编译进来的 rules_data.h，
- *                          # 不依赖运行目录；logs 测试用 /tmp 做 LOCALAPPDATA）
- *   x86_64-w64-mingw32-gcc ... -o build/test_slice3.exe ... # Windows 交叉只编不过
+ *   make check    # 经 Makefile 跑全部套件，退出码 0=全过
+ *                 #（内置 rules.json 是编译进来的 rules_data.h，
+ *                 # 不依赖运行目录；logs 测试用 /tmp 做 LOCALAPPDATA）
  *
  * 断言对照：rules.rs（validate / update 语义）、im.rs tests、
  * system.rs tests（safe_for_quoted_cmd_path / valid_recovery_paths）。
@@ -198,12 +190,17 @@ static void test_rules_config(void) {
 /* ---------------- timeutil / logs ---------------- */
 
 static void test_timeutil(void) {
-    char *m = cdc_month_label(0);
-    CHECK(m && strcmp(m, "1970-01") == 0, "month_label(0) == 1970-01 (got %s)", m ? m : "(null)");
-    free(m);
-    char *s = cdc_stamp();
-    CHECK(s && strlen(s) == 15 && s[8] == '_', "stamp shape YYYYMMDD_HHMMSS (got %s)", s ? s : "(null)");
-    free(s);
+    CHECK(cdc::month_label(0) == "1970-01", "month_label(0) == 1970-01 (got %s)",
+          cdc::month_label(0).c_str());
+    std::string s = cdc::stamp();
+    CHECK(s.size() == 15 && s[8] == '_', "stamp shape YYYYMMDD_HHMMSS (got %s)", s.c_str());
+    std::string h = cdc::human_stamp(1750000000ULL);
+    CHECK(h.size() == 19 && h[4] == '-' && h[7] == '-' && h[10] == ' ' && h[13] == ':' &&
+              h[16] == ':',
+          "human_stamp shape YYYY-MM-DD HH:MM:SS (got %s)", h.c_str());
+    /* 1750000000 = 2025-06-15 09:06:40 UTC；任意 ±14h 时区仍在 6 月。 */
+    CHECK(cdc::month_label(1750000000ULL) == "2025-06", "month_label(1750000000) == 2025-06 (got %s)",
+          cdc::month_label(1750000000ULL).c_str());
 }
 
 static void test_logs(void) {

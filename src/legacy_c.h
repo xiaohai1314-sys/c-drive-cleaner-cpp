@@ -136,3 +136,19 @@ int cdc_remove_empty_dirs(const char *root);
 // ---- recycle ----
 int cdc_send_to_recycle(const char **paths, size_t npaths, char ***out_failed,
                         size_t *out_nfailed, cdc_err_t *err);
+
+// ---- timeutil ----
+typedef struct {
+    uint16_t year;
+    uint16_t month;
+    uint16_t day;
+    uint16_t hour;
+    uint16_t minute;
+    uint16_t second;
+} cdc_local_time_t;
+
+/* Unix 秒 → 本地时间；换算失败返回全 0。后三个返回的串调用方 free()。 */
+cdc_local_time_t cdc_local_time(uint64_t seconds);
+char *cdc_month_label(uint64_t seconds);
+char *cdc_stamp(void);
+char *cdc_human_stamp(uint64_t seconds);
