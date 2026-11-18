@@ -1,18 +1,20 @@
 /* host/mingw_uuids.h — MinGW 交叉编译用的 __uuidof 特化（合并时补）。
  *
- * bridge.cpp / host.cpp 用 __uuidof(<4 个 WebView2 回调接口>) 做
+ * bridge.cpp / host.cpp 用 __uuidof(<6 个 WebView2 回调接口>) 做
  * QueryInterface 的 IID 比较。MSVC 下 __uuidof 是编译器内建；
  * MinGW-clang 下 __uuidof 展开为 __mingw_uuidof<T>()，其特化必须由
  * __CRT_UUID_DECL 提供，而微软的 WebView2.h（MSVC 风格）里没有——
  * 只有 EXTERN_C __declspec(selectany) 的 IID_* 常量。
  * 这里用 WebView2.h 里的真实 GUID（与 IID_* 常量逐字节一致）补上
- * 4 个特化；MSVC 下本文件不被包含。
+ * 6 个特化；MSVC 下本文件不被包含。
  */
 #pragma once
 
 #ifdef __MINGW32__
 __CRT_UUID_DECL(ICoreWebView2WebMessageReceivedEventHandler, 0x57213f19, 0x00e6, 0x49fa, 0x8e, 0x07, 0x89, 0x8e, 0xa0, 0x1e, 0xcb, 0xd2);
 __CRT_UUID_DECL(ICoreWebView2WebResourceRequestedEventHandler, 0xab00b74c, 0x15f1, 0x4646, 0x80, 0xe8, 0xe7, 0x63, 0x41, 0xd2, 0x5d, 0x71);
+__CRT_UUID_DECL(ICoreWebView2NavigationStartingEventHandler, 0x9adbe429, 0xf36d, 0x432b, 0x9d, 0xdc, 0xf8, 0x88, 0x1f, 0xbd, 0x76, 0xe3);
+__CRT_UUID_DECL(ICoreWebView2NewWindowRequestedEventHandler, 0xd4c185fe, 0xc81c, 0x4989, 0x97, 0xaf, 0x2d, 0x3f, 0xa7, 0xab, 0x56, 0x51);
 __CRT_UUID_DECL(ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler, 0x4e8a3389, 0xc9d8, 0x4bd2, 0xb6, 0xb5, 0x12, 0x4f, 0xee, 0x6c, 0xc1, 0x4d);
 __CRT_UUID_DECL(ICoreWebView2CreateCoreWebView2ControllerCompletedHandler, 0x6c4819f3, 0xc9b7, 0x4260, 0x81, 0x27, 0xc9, 0xf5, 0xbd, 0xe7, 0xf6, 0x8c);
 #endif /* __MINGW32__ */
