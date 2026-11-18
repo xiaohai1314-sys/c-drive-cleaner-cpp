@@ -14,6 +14,7 @@
 #include "cdc_process.h"
 #include "indextask.h"
 #include "rules.h"
+#include "im.h"
 
 void cdc_err_init(cdc_err_t *err) { cdc::err_init(err); }
 void cdc_err_set(cdc_err_t *err, int code, const char *fmt, ...) {
@@ -903,3 +904,202 @@ int cdc_rules_rollback(char **out_message, cdc_err_t *err) {
         *out_message = dup_c(msg);
     return CDC_OK;
 }
+
+// ---- im 转发 ----
+static void fill_c_im_record(const cdc::ImRecord &src, cdc_im_record_t *dst) {
+    dst->path = dup_c(src.path);
+    dst->size = src.size;
+    dst->mtime = src.mtime;
+    dst->kind = dup_c(src.kind);
+    dst->sub = dup_c(src.sub);
+    dst->month = dup_c(src.month);
+    dst->name = dup_c(src.name);
+    dst->seq = src.seq;
+}
+
+void cdc_im_record_free(cdc_im_record_t *r) {
+    if (!r) return;
+    free(r->path);
+    free(r->kind);
+    free(r->sub);
+    free(r->month);
+    free(r->name);
+    r->path = r->kind = r->sub = r->month = r->name = NULL;
+}
+
+void cdc_im_records_free(cdc_im_record_t *records, size_t n) {
+    if (!records) return;
+    for (size_t i = 0; i < n; i++) cdc_im_record_free(&records[i]);
+    free(records);
+}
+
+static int im_roots_vec_to_c(const std::vector<std::string> &v, char ***out_roots,
+                             size_t *out_n) {
+    if (out_roots) *out_roots = NULL;
+    if (out_n) *out_n = 0;
+    if (v.empty()) return CDC_OK;
+    char **arr = (char **)calloc(v.size(), sizeof(char *));
+    if (!arr) return CDC_ERR_NOMEM;
+    for (size_t i = 0; i < v.size(); i++) {
+        arr[i] = dup_c(v[i]);
+        if (!arr[i]) {
+            cdc_strvec_free(arr, i);
+            return CDC_ERR_NOMEM;
+        }
+    }
+    if (out_roots) *out_roots = arr;
+    if (out_n) *out_n = v.size();
+    return CDC_OK;
+}
+
+int cdc_im_roots(const char *kind, char ***out_roots, size_t *out_n, cdc_err_t *err) {
+    if (out_roots) *out_roots = NULL;
+    if (out_n) *out_n = 0;
+    std::vector<std::string> roots;
+    int rc = cdc::im_roots(kind ? kind : "", &roots, err);
+    if (rc != CDC_OK) return rc;
+    return im_roots_vec_to_c(roots, out_roots, out_n);
+}
+
+int cdc_im_migration_roots(const char *kind, char ***out_roots, size_t *out_n,
+                           cdc_err_t *err) {
+    if (out_roots) *out_roots = NULL;
+    if (out_n) *out_n = 0;
+    std::vector<std::string> roots;
+    int rc = cdc::im_migration_roots(kind ? kind : "", &roots, err);
+    if (rc != CDC_OK) return rc;
+    return im_roots_vec_to_c(roots, out_roots, out_n);
+}
+
+int cdc_im_is_program_root(const char *root) {
+    return cdc::im_is_program_root(root ? root : "") ? 1 : 0;
+}
+
+int cdc_im_classify(const char *path, const char *root, char **out_kind,
+                    char **out_sub) {
+    if (out_kind) *out_kind = NULL;
+    if (out_sub) *out_sub = NULL;
+    std::string kind, sub;
+    bool ok = cdc::im_classify(path ? path : "", root ? root : "",
+                               out_kind ? &kind : nullptr, out_sub ? &sub : nullptr);
+    if (!ok) return 0;
+    if (out_kind) *out_kind = dup_c(kind);
+    if (out_sub) *out_sub = dup_c(sub);
+    return 1;
+}
+
+int cdc_im_list_media(const char **roots, size_t nroots, cdc_im_record_t **out_records,
+                      size_t *out_n, cdc_err_t *err) {
+    if (out_records) *out_records = NULL;
+    if (out_n) *out_n = 0;
+    std::vector<std::string> roots_v;
+    roots_v.reserve(nroots);
+    for (size_t i = 0; i < nroots; i++) roots_v.emplace_back(roots[i] ? roots[i] : "");
+    std::vector<cdc::ImRecord> recs;
+    int rc = cdc::im_list_media(roots_v, &recs, err);
+    if (rc != CDC_OK) return rc;
+    if (recs.empty()) return CDC_OK;
+    auto *arr = (cdc_im_record_t *)calloc(recs.size(), sizeof(cdc_im_record_t));
+    if (!arr) return CDC_ERR_NOMEM;
+    for (size_t i = 0; i < recs.size(); i++) fill_c_im_record(recs[i], &arr[i]);
+    if (out_records) *out_records = arr;
+    if (out_n) *out_n = recs.size();
+    return CDC_OK;
+}
+
+void cdc_im_remember_scanned(const cdc_im_record_t *records, size_t n) {
+    if (!records) return;
+    std::vector<cdc::ImRecord> recs;
+    recs.reserve(n);
+    for (size_t i = 0; i < n; i++) {
+        cdc::ImRecord r;
+        r.path = records[i].path ? records[i].path : "";
+        recs.push_back(std::move(r));
+    }
+    cdc::im_remember_scanned(recs);
+}
+
+int cdc_im_is_scanned(const char *path) {
+    return cdc::im_is_scanned(path ? path : "") ? 1 : 0;
+}
+
+int cdc_im_thumbnail(const char *path, const char **out_mime, uint8_t **out_data,
+                     size_t *out_len, cdc_err_t *err) {
+    if (out_mime) *out_mime = NULL;
+    if (out_data) *out_data = NULL;
+    if (out_len) *out_len = 0;
+    std::vector<uint8_t> data;
+    const char *mime = nullptr;
+    int rc = cdc::im_thumbnail(path ? path : "", &mime, &data, err);
+    if (rc != 1) return rc;
+    uint8_t *buf = (uint8_t *)malloc(data.size() ? data.size() : 1);
+    if (!buf) return CDC_ERR_NOMEM;
+    memcpy(buf, data.data(), data.size());
+    if (out_mime) *out_mime = mime;
+    if (out_data) *out_data = buf;
+    if (out_len) *out_len = data.size();
+    return 1;
+}
+
+void cdc_im_preview_free(cdc_im_preview_t *pv) {
+    if (!pv) return;
+    free(pv->text);
+    pv->text = NULL;
+}
+
+int cdc_im_preview(const char *path, cdc_im_preview_t *out, cdc_err_t *err) {
+    if (!out) return CDC_ERR_INVALID_ARG;
+    cdc::ImPreview pv;
+    int rc = cdc::im_preview(path ? path : "", &pv, err);
+    if (rc != CDC_OK) return rc;
+    out->text = dup_c(pv.text);
+    out->binary = pv.binary ? 1 : 0;
+    out->truncated = pv.truncated ? 1 : 0;
+    out->size = pv.size;
+    return CDC_OK;
+}
+
+void cdc_delete_report_free(cdc_delete_report_t *r) {
+    if (!r) return;
+    cdc_strvec_free(r->failed, r->nfailed);
+    cdc_strvec_free(r->reasons, r->nreasons);
+    r->failed = r->reasons = NULL;
+    r->nfailed = r->nreasons = 0;
+}
+
+int cdc_im_clean(const char *kind, const char **kinds, size_t nkinds,
+                 const char **paths, size_t npaths, int has_paths,
+                 cdc_delete_report_t *out, cdc_err_t *err) {
+    if (!out) return CDC_ERR_INVALID_ARG;
+    std::vector<std::string> kinds_v, paths_v;
+    kinds_v.reserve(nkinds);
+    for (size_t i = 0; i < nkinds; i++) kinds_v.emplace_back(kinds[i] ? kinds[i] : "");
+    paths_v.reserve(npaths);
+    for (size_t i = 0; i < npaths; i++) paths_v.emplace_back(paths[i] ? paths[i] : "");
+    cdc::DeleteReport rep;
+    int rc = cdc::im_clean(kind ? kind : "", kinds_v, paths_v, has_paths != 0, &rep, err);
+    if (rc != CDC_OK) return rc;
+    out->freed = rep.freed;
+    out->deleted = rep.deleted;
+    out->failed = NULL;
+    out->nfailed = 0;
+    out->reasons = NULL;
+    out->nreasons = 0;
+    if (!rep.failed.empty()) {
+        out->failed = (char **)calloc(rep.failed.size(), sizeof(char *));
+        if (!out->failed) return CDC_ERR_NOMEM;
+        for (size_t i = 0; i < rep.failed.size(); i++)
+            out->failed[i] = dup_c(rep.failed[i]);
+        out->nfailed = rep.failed.size();
+    }
+    if (!rep.reasons.empty()) {
+        out->reasons = (char **)calloc(rep.reasons.size(), sizeof(char *));
+        if (!out->reasons) return CDC_ERR_NOMEM;
+        for (size_t i = 0; i < rep.reasons.size(); i++)
+            out->reasons[i] = dup_c(rep.reasons[i]);
+        out->nreasons = rep.reasons.size();
+    }
+    return CDC_OK;
+}
+
+void cdc_im_set_hooks(const cdc_hooks_t *hooks) { cdc::im_set_hooks(hooks); }

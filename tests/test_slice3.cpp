@@ -225,19 +225,17 @@ static void test_logs(void) {
 
 static void check_classify(const char *path, const char *root,
                            const char *want_kind, const char *want_sub) {
-    char *kind = NULL, *sub = NULL;
-    int ok = cdc_im_classify(path, root, &kind, &sub);
+    std::string kind, sub;
+    bool ok = cdc::im_classify(path, root, &kind, &sub);
     if (!want_kind) {
-        CHECK(!ok, "classify %s -> None (got %s/%s)", path, kind ? kind : "-", sub ? sub : "-");
+        CHECK(!ok, "classify %s -> None (got %s/%s)", path, kind.c_str(), sub.c_str());
     } else {
-        CHECK(ok && kind && strcmp(kind, want_kind) == 0,
-              "classify %s -> %s (got %s)", path, want_kind, kind ? kind : "(none)");
+        CHECK(ok && kind == want_kind,
+              "classify %s -> %s (got %s)", path, want_kind, kind.c_str());
         if (want_sub)
-            CHECK(sub && strcmp(sub, want_sub) == 0,
-                  "classify %s sub %s (got %s)", path, want_sub, sub ? sub : "(none)");
+            CHECK(sub == want_sub,
+                  "classify %s sub %s (got %s)", path, want_sub, sub.c_str());
     }
-    free(kind);
-    free(sub);
 }
 
 static void test_im_classify(void) {
@@ -299,13 +297,11 @@ static void test_im_thumbnail_preview(void) {
         return;
     }
     const char *mime = NULL;
-    uint8_t *data = NULL;
-    size_t len = 0;
-    cdc_err_t e;
-    int rc = cdc_im_thumbnail(jpg, &mime, &data, &len, &e);
-    CHECK(rc == 1 && mime && strcmp(mime, "image/jpeg") == 0 && len == 16,
+    std::vector<uint8_t> data;
+    cdc::Error e;
+    int rc = cdc::im_thumbnail(jpg, &mime, &data, &e);
+    CHECK(rc == 1 && mime && strcmp(mime, "image/jpeg") == 0 && data.size() == 16,
           "thumbnail plain jpeg");
-    free(data);
     /* XOR 0x05 加密的 .dat（微信聊天图片）。 */
     char dat[1200];
     snprintf(dat, sizeof(dat), "%s/b.dat", base);
@@ -316,15 +312,12 @@ static void test_im_thumbnail_preview(void) {
         return;
     }
     mime = NULL;
-    data = NULL;
-    len = 0;
-    rc = cdc_im_thumbnail(dat, &mime, &data, &len, &e);
+    data.clear();
+    rc = cdc::im_thumbnail(dat, &mime, &data, &e);
     CHECK(rc == 1 && mime && strcmp(mime, "image/jpeg") == 0,
           "thumbnail xor .dat decrypted");
-    if (data) {
-        CHECK(memcmp(data, jpeg_head, 16) == 0, "thumbnail decrypted bytes match");
-        free(data);
-    }
+    CHECK(data.size() == 16 && memcmp(data.data(), jpeg_head, 16) == 0,
+          "thumbnail decrypted bytes match");
     /* 非图片。 */
     char txt[1200];
     snprintf(txt, sizeof(txt), "%s/c.txt", base);
@@ -332,14 +325,13 @@ static void test_im_thumbnail_preview(void) {
         CHECK(0, "create text preview fixture");
         return;
     }
-    rc = cdc_im_thumbnail(txt, &mime, &data, &len, &e);
+    rc = cdc::im_thumbnail(txt, &mime, &data, &e);
     CHECK(rc == 0, "thumbnail non-image -> 0");
     /* 预览：文本与二进制。 */
-    cdc_im_preview_t pv;
-    CHECK(cdc_im_preview(txt, &pv, &e) == CDC_OK && !pv.binary &&
-              strstr(pv.text, "hello world") != NULL,
+    cdc::ImPreview pv;
+    CHECK(cdc::im_preview(txt, &pv, &e) == cdc::kOk && !pv.binary &&
+              pv.text.find("hello world") != std::string::npos,
           "preview text file");
-    cdc_im_preview_free(&pv);
     char bin[1200];
     snprintf(bin, sizeof(bin), "%s/d.bin", base);
     uint8_t bin_data[64];
@@ -348,18 +340,15 @@ static void test_im_thumbnail_preview(void) {
         CHECK(0, "create binary preview fixture");
         return;
     }
-    CHECK(cdc_im_preview(bin, &pv, &e) == CDC_OK && pv.binary &&
-              strstr(pv.text, "01 01 01") != NULL,
+    CHECK(cdc::im_preview(bin, &pv, &e) == cdc::kOk && pv.binary &&
+              pv.text.find("01 01 01") != std::string::npos,
           "preview binary -> hex");
-    cdc_im_preview_free(&pv);
     /* 已扫描集合。 */
-    cdc_im_record_t rec;
-    memset(&rec, 0, sizeof(rec));
-    rec.path = strdup(txt);
-    cdc_im_remember_scanned(&rec, 1);
-    CHECK(cdc_im_is_scanned(txt), "is_scanned remembers");
-    CHECK(!cdc_im_is_scanned("/tmp/never-scanned-xyz"), "is_scanned unknown false");
-    free(rec.path);
+    cdc::ImRecord rec;
+    rec.path = txt;
+    cdc::im_remember_scanned(std::span<const cdc::ImRecord>(&rec, 1));
+    CHECK(cdc::im_is_scanned(txt), "is_scanned remembers");
+    CHECK(!cdc::im_is_scanned("/tmp/never-scanned-xyz"), "is_scanned unknown false");
 #ifndef _WIN32
     snprintf(cmd, sizeof(cmd), "rm -rf %s", base);
     { int rc = system(cmd); (void)rc; }

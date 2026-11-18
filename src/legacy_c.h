@@ -273,3 +273,58 @@ typedef struct {
 
 int cdc_rules_update(cdc_rules_update_result_t *out, cdc_err_t *err);
 int cdc_rules_rollback(char **out_message, cdc_err_t *err);
+
+// ---- im ----
+typedef struct {
+    char *path;
+    uint64_t size;
+    uint64_t mtime;
+    char *kind;
+    char *sub;
+    char *month;
+    char *name;
+    uint64_t seq;
+} cdc_im_record_t;
+
+void cdc_im_record_free(cdc_im_record_t *r);
+void cdc_im_records_free(cdc_im_record_t *records, size_t n);
+
+int cdc_im_roots(const char *kind, char ***out_roots, size_t *out_n,
+                 cdc_err_t *err);
+int cdc_im_migration_roots(const char *kind, char ***out_roots,
+                           size_t *out_n, cdc_err_t *err);
+int cdc_im_is_program_root(const char *root);
+int cdc_im_classify(const char *path, const char *root, char **out_kind,
+                    char **out_sub);
+int cdc_im_list_media(const char **roots, size_t nroots,
+                      cdc_im_record_t **out_records, size_t *out_n,
+                      cdc_err_t *err);
+void cdc_im_remember_scanned(const cdc_im_record_t *records, size_t n);
+int cdc_im_is_scanned(const char *path);
+int cdc_im_thumbnail(const char *path, const char **out_mime,
+                     uint8_t **out_data, size_t *out_len, cdc_err_t *err);
+
+typedef struct {
+    char *text;
+    int binary;
+    int truncated;
+    uint64_t size;
+} cdc_im_preview_t;
+
+void cdc_im_preview_free(cdc_im_preview_t *pv);
+int cdc_im_preview(const char *path, cdc_im_preview_t *out, cdc_err_t *err);
+
+typedef struct {
+    uint64_t freed;
+    uint64_t deleted;
+    char **failed;
+    size_t nfailed;
+    char **reasons;
+    size_t nreasons;
+} cdc_delete_report_t;
+
+void cdc_delete_report_free(cdc_delete_report_t *r);
+int cdc_im_clean(const char *kind, const char **kinds, size_t nkinds,
+                 const char **paths, size_t npaths, int has_paths,
+                 cdc_delete_report_t *out, cdc_err_t *err);
+void cdc_im_set_hooks(const cdc_hooks_t *hooks);
