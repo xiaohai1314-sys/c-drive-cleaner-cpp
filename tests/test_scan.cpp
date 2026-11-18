@@ -10,10 +10,6 @@
  *       third_party/cjson（CDC_HAVE_CJSON 时）。
  * 不依赖 fileindex.c / indextask.c / mft_raw.c（只用 fileindex.h 的类型）。
  */
-/* 注意：必须带值 1，不能写裸 #define _DEFAULT_SOURCE——
- * mimalloc 的 -include wrapper（src/cdc_mimalloc_override.h）先包含
- * 系统头，features.h 已把 _DEFAULT_SOURCE 归一化为 1；裸定义再定义一次
- * 会触发 -Werror 的 macro-redefined。 */
 
 #include <dirent.h>
 #include <cerrno>

@@ -1,6 +1,6 @@
 # c-drive-cleaner-cpp
 
-Windows 磁盘清理工具的 C++20 移植版：原生后端负责 NTFS/MFT、索引、扫描与安全操作，Vue 3 + Vite + TypeScript 前端通过 WebView2 宿主与后端通信。仓库内的自有代码按 C++20 编译；`third_party/` 中的 SQLite、cJSON、BLAKE3、xxHash 和 mimalloc 保持各自的 C 实现。
+Windows 磁盘清理工具的 C++20 移植版：原生后端负责 NTFS/MFT、索引、扫描与安全操作，Vue 3 + Vite + TypeScript 前端通过 WebView2 宿主与后端通信。仓库内的自有代码按 C++20 编译；`third_party/` 中的 SQLite、cJSON、BLAKE3 和 xxHash 保持各自的 C 实现。
 
 ## 当前状态与限制
 

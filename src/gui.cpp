@@ -77,7 +77,7 @@ namespace {
 /* ---------------- 小工具 ---------------- */
 
 #ifdef _WIN32
-/* bridge 的 out_json/out_error 是 malloc 分配、由 bridge 以 mi_free 释放。 */
+/* bridge 的 out_json/out_error 是 malloc 分配、由 bridge 以 free 释放。 */
 char *gui_strdup(const std::string &s) {
     char *p = (char *)malloc(s.size() + 1);
     if (p) memcpy(p, s.c_str(), s.size() + 1);
@@ -797,7 +797,7 @@ int gui_ok_json(char **out_json, cJSON *root) {
     char *s = cJSON_PrintUnformatted(root);
     cJSON_Delete(root);
     if (!s) return -1;
-    /* 同上：转拷为 mimalloc 内存，bridge 以 mi_free 释放。 */
+    /* 同上：转拷一份，bridge 以 free 释放。 */
     char *copy = gui_strdup(s);
     cJSON_free(s);
     if (!copy) return -1;

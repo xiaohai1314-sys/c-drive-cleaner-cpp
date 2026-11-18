@@ -37,10 +37,6 @@
 #include <windows.h>
 #include <windowsx.h>
 
-// mimalloc（性能优化项 6）：只显式调 mi_*，不用 -include
-// mimalloc-override.h 的宏覆盖（C++ 翻译单元里宏覆盖会干扰标准库头文件）。
-#include "mimalloc.h"
-
 #include <new>
 #include <string>
 #include <string_view>
@@ -634,7 +630,7 @@ int window_minimize(const char *args_json, char **out_json, char **out_error) {
   (void)args_json;
   (void)out_error;
   ShowWindow(g_hwnd, SW_MINIMIZE);
-  *out_json = mi_strdup("null");
+  *out_json = strdup("null");
   return *out_json ? 0 : -1;
 }
 
@@ -642,7 +638,7 @@ int window_maximize(const char *args_json, char **out_json, char **out_error) {
   (void)args_json;
   (void)out_error;
   ShowWindow(g_hwnd, IsZoomed(g_hwnd) ? SW_RESTORE : SW_MAXIMIZE);
-  *out_json = mi_strdup("null");
+  *out_json = strdup("null");
   return *out_json ? 0 : -1;
 }
 
@@ -650,7 +646,7 @@ int window_close(const char *args_json, char **out_json, char **out_error) {
   (void)args_json;
   (void)out_error;
   PostMessageW(g_hwnd, WM_CLOSE, 0, 0);
-  *out_json = mi_strdup("null");
+  *out_json = strdup("null");
   return *out_json ? 0 : -1;
 }
 

@@ -9,7 +9,6 @@
 | BLAKE3（官方 C 实现） | 1.8.7 | https://github.com/BLAKE3-team/BLAKE3，tag `1.8.7` | commit `f3149ec5bb5449af877ba20377a11008ff499fa2` |
 | cJSON | 1.7.19 | https://github.com/DaveGamble/cJSON，tag `v1.7.19` | commit `c859b25da02955fef659d658b8f324b5cde87be3` |
 | xxHash（官方 C 实现） | 0.8.4 | https://github.com/Cyan4973/xxHash，tag `v0.8.4` | commit `c87183a77d67f7d37e3d2d1b7eaac5e7c695e4f0` |
-| mimalloc（Microsoft 的 malloc 替代） | 3.7.0 | https://github.com/microsoft/mimalloc，tag `v3.7.0` | commit `1ed67b5156a763441d2ec3c20221a7b3cd866129` |
 
 ## 各目录内容（只取构建需要的最小集合）
 
@@ -26,16 +25,6 @@
 - `xxhash/`：`xxhash.c` + `xxhash.h`（`xxhsum`、`xxh_x86dispatch.c`、
   tests/docs 未取用）。采样层只用 XXH3-64（见 `src/sampling.c`）。
   许可证：BSD-2-Clause（见 xxhash.h 头注释）。
-- `mimalloc/`：`include/`（`mimalloc.h`、`mimalloc-override.h`、
-  `mimalloc-new-delete.h`、`mimalloc-profile.h`、`mimalloc-stats.h`、
-  内部头 `mimalloc/*`）+ `src/`（`static.c` 单文件聚合整个库：
-  `alloc/`、`arena/`、`heap/`、`prim/`、`profile/`、`util/`）。
-  只编 `src/static.c` 一个翻译单元，不用上游的 CMake。
-  全局替换方式：编译自家源码（含 sqlite3.c / cJSON.c）时
-  `-include mimalloc-override.h`（见 Makefile 的 CDC_MIMALLOC 一节）；
-  mimalloc 自身编译时不加该宏。`test/`、`bin/`、`doc/`、`cmake/`、
-  `contrib/` 未取用。
-  许可证：MIT（见 LICENSE）。
 
 ## 升级方法
 

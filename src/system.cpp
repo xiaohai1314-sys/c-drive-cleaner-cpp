@@ -380,8 +380,7 @@ int write_journal(std::string_view source, std::string_view backup, std::string_
     if (rc != kOk) {
         /* create_new 失败：Rust 映射 AlreadyExists（文件已存在时
          * create_new 返回 AlreadyExists）。 */
-        /* text 是 cJSON_PrintUnformatted 的返回值，用 cJSON_free 释放
-         *（cJSON 自身的 free 钩子，不依赖本文件是否走 mimalloc 全局替换）。 */
+        /* text 是 cJSON_PrintUnformatted 的返回值，用 cJSON_free 释放。 */
         cJSON_free(text);
         if (err) *err = e;
         return rc;

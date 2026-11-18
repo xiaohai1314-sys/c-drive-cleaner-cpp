@@ -10,9 +10,8 @@
 // 再 ExecuteScript。host.cpp 的 WndProc 收到 WM_CDC_BRIDGE_REPLY 后调
 // cdc_bridge_flush_replies()。
 //
-// 所有权：handler 返回的 *out_json / *out_error 由 malloc 分配（全局
-// 替换为 mimalloc，见 Makefile / CMakeLists 的 mimalloc 一节），桥接层
-// 用 mi_free() 释放；调用方不要用 new 分配。
+// 所有权：handler 返回的 *out_json / *out_error 由 malloc 分配，桥接层
+// 用 free() 释放；调用方不要用 new 分配。
 // 命令表容量 CDC_BRIDGE_MAX_COMMANDS（64），够放 45 个 Tauri 命令 +
 // window_* 宿主命令；注册满了返回 -1。
 //
