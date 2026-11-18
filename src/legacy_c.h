@@ -220,3 +220,56 @@ int cdc_indextask_run_task(char *msg, size_t cap, cdc_err_t *err);
 int cdc_indextask_set_task_enabled(int enabled, char *msg, size_t cap, cdc_err_t *err);
 int cdc_indextask_delete_task(char *msg, size_t cap, cdc_err_t *err);
 int cdc_indextask_selftest(void);
+
+// ---- rules ----
+#define CDC_RULES_MAX_BYTES 1000000u
+#define CDC_RULES_MAX_COUNT 200u
+
+typedef struct {
+    char *key;
+    char *name;
+    char *tier;
+    char *kind;
+    char *describe;
+    char *warning;
+    char *note;
+    char **paths;
+    size_t npaths;
+    char **glob_dirs;
+    size_t nglob_dirs;
+    char **patterns;
+    size_t npatterns;
+    char **exclude;
+    size_t nexclude;
+    uint64_t min_age_minutes;
+    int requires_confirm;
+    int prune_dirs;
+} cdc_rule_t;
+
+void cdc_rule_free_members(cdc_rule_t *r);
+int cdc_rules_parse_text(const char *text, cdc_rule_t **out_rules,
+                         size_t *out_n, uint64_t *out_version,
+                         cdc_err_t *err);
+void cdc_rules_free(cdc_rule_t *rules, size_t n);
+int cdc_rules_load_all(cdc_rule_t **out_rules, size_t *out_n, cdc_err_t *err);
+char *cdc_expand_env(const char *raw);
+char *cdc_remote_rules_path(void);
+char *cdc_remote_rules_backup_path(void);
+int cdc_rules_config(char **out_url, char **out_blake3, cdc_err_t *err);
+int cdc_rule_validate(const char *key, const char *kind, const char *tier,
+                      int has_command, int command_non_empty,
+                      const char **paths, size_t npaths,
+                      const char **glob_dirs, size_t nglob_dirs,
+                      cdc_err_t *err);
+int cdc_rules_validate_text(const char *text, cdc_err_t *err);
+int cdc_rule_key_ok(const char *key);
+int cdc_rule_path_allowed(const char *raw, char **out_err);
+
+typedef struct {
+    size_t accepted;
+    size_t total;
+    char *message; /* 调用方 free() */
+} cdc_rules_update_result_t;
+
+int cdc_rules_update(cdc_rules_update_result_t *out, cdc_err_t *err);
+int cdc_rules_rollback(char **out_message, cdc_err_t *err);

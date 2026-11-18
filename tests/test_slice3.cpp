@@ -106,71 +106,70 @@ static int write_file(const char *path, const void *data, size_t n) {
 /* ---------------- rules ---------------- */
 
 static void test_rules_load_all(void) {
-    cdc_rule_t *rules = NULL;
-    size_t n = 0;
-    cdc_err_t e;
-    int rc = cdc_rules_load_all(&rules, &n, &e);
-    CHECK(rc == CDC_OK, "rules load_all rc=%d (%s)", rc, e.message);
-    if (rc != CDC_OK) return;
-    CHECK(n == 1074, "rules count 1074, got %zu", n);
+    std::vector<cdc::Rule> rules;
+    cdc::Error e;
+    int rc = cdc::load_all_rules(&rules, &e);
+    CHECK(rc == cdc::kOk, "rules load_all rc=%d (%s)", rc, e.message);
+    if (rc != cdc::kOk) return;
+    CHECK(rules.size() == 1074, "rules count 1074, got %zu", rules.size());
     size_t standard = 0, deep = 0;
-    for (size_t i = 0; i < n; i++) {
-        if (strcmp(rules[i].tier, "standard") == 0) standard++;
-        else if (strcmp(rules[i].tier, "deep") == 0) deep++;
+    for (auto &r : rules) {
+        if (r.tier == "standard") standard++;
+        else if (r.tier == "deep") deep++;
     }
     CHECK(standard == 1071, "rules standard 1071, got %zu", standard);
     CHECK(deep == 3, "rules deep 3, got %zu", deep);
     /* 977 条用 desc 而非 describe：Rust serde 忽略 desc，
      * 故它们的 describe 为空——C 版只读 describe，应与 Rust 一致。 */
     size_t empty_describe = 0;
-    for (size_t i = 0; i < n; i++) {
-        if (!rules[i].describe || rules[i].describe[0] == '\0') empty_describe++;
+    for (auto &r : rules) {
+        if (r.describe.empty()) empty_describe++;
     }
     CHECK(empty_describe == 977, "rules empty describe 977, got %zu", empty_describe);
-    cdc_rules_free(rules, n);
 }
 
 static void test_rules_validate(void) {
-    cdc_err_t e;
+    cdc::Error e;
     /* kind 必须为 "files"（空串 kind 在 Rust 里是合法的 files 规则，
      * 但 "command" 必须拒绝）。 */
-    CHECK(cdc_rule_validate("k1", "command", "standard", 0, 0, NULL, 0, NULL, 0, &e) != CDC_OK,
+    CHECK(cdc::validate_rule("k1", "command", "standard", false, false, {}, {}, &e) != cdc::kOk,
           "validate rejects kind=command");
-    CHECK(cdc_rule_validate("k1", "files", "standard", 1, 1, NULL, 0, NULL, 0, &e) != CDC_OK,
+    CHECK(cdc::validate_rule("k1", "files", "standard", true, true, {}, {}, &e) != cdc::kOk,
           "validate rejects command field");
-    CHECK(cdc_rule_validate("k1", "files", "bogus", 0, 0, NULL, 0, NULL, 0, &e) != CDC_OK,
+    CHECK(cdc::validate_rule("k1", "files", "bogus", false, false, {}, {}, &e) != cdc::kOk,
           "validate rejects bad tier");
-    CHECK(cdc_rule_validate("", "files", "standard", 0, 0, NULL, 0, NULL, 0, &e) != CDC_OK,
+    CHECK(cdc::validate_rule("", "files", "standard", false, false, {}, {}, &e) != cdc::kOk,
           "validate rejects empty key");
-    CHECK(cdc_rule_validate("k 1", "files", "standard", 0, 0, NULL, 0, NULL, 0, &e) != CDC_OK,
+    CHECK(cdc::validate_rule("k 1", "files", "standard", false, false, {}, {}, &e) != cdc::kOk,
           "validate rejects key with space");
-    const char *good_paths[1] = { "%LOCALAPPDATA%\\Temp\\a.tmp" };
-    CHECK(cdc_rule_validate("k1", "files", "standard", 0, 0, good_paths, 1, NULL, 0, &e) == CDC_OK,
+    const std::string good_paths[1] = {"%LOCALAPPDATA%\\Temp\\a.tmp"};
+    CHECK(cdc::validate_rule("k1", "files", "standard", false, false, good_paths, {}, &e) ==
+              cdc::kOk,
           "validate accepts Temp path (%s)", e.message);
-    const char *bad_paths[1] = { "C:\\Windows\\System32\\a.dll" };
-    CHECK(cdc_rule_validate("k1", "files", "standard", 0, 0, bad_paths, 1, NULL, 0, &e) != CDC_OK,
+    const std::string bad_paths[1] = {"C:\\Windows\\System32\\a.dll"};
+    CHECK(cdc::validate_rule("k1", "files", "standard", false, false, bad_paths, {}, &e) !=
+              cdc::kOk,
           "validate rejects system path");
-    CHECK(cdc_rule_validate("k1", "", "standard", 0, 0, NULL, 0, NULL, 0, &e) == CDC_OK,
+    CHECK(cdc::validate_rule("k1", "", "standard", false, false, {}, {}, &e) == cdc::kOk,
           "validate accepts empty kind (files default)");
     /* key 规则：Rust key_ok 只允许 ASCII 字母数字 + _-（不含 '.'）。 */
-    CHECK(cdc_rule_key_ok("abc-123_X"), "key_ok abc-123_X");
-    CHECK(!cdc_rule_key_ok("a.b"), "key_ok rejects dot");
-    CHECK(!cdc_rule_key_ok("a b"), "key_ok rejects space");
-    CHECK(!cdc_rule_key_ok(""), "key_ok rejects empty");
+    CHECK(cdc::rule_key_ok("abc-123_X"), "key_ok abc-123_X");
+    CHECK(!cdc::rule_key_ok("a.b"), "key_ok rejects dot");
+    CHECK(!cdc::rule_key_ok("a b"), "key_ok rejects space");
+    CHECK(!cdc::rule_key_ok(""), "key_ok rejects empty");
     /* path_allowed：%VAR% 展开、glob 段合法性。 */
-    char *perr = NULL;
-    CHECK(cdc_rule_path_allowed("%TEMP%\\a.tmp", &perr) == CDC_OK, "path_allowed TEMP");
-    free(perr);
-    CHECK(cdc_rule_path_allowed("C:\\Windows\\a.txt", &perr) != CDC_OK, "path_allowed rejects system");
-    free(perr);
+    std::string perr;
+    CHECK(cdc::rule_path_allowed("%TEMP%\\a.tmp", &perr) == cdc::kOk, "path_allowed TEMP");
+    CHECK(cdc::rule_path_allowed("C:\\Windows\\a.txt", &perr) != cdc::kOk,
+          "path_allowed rejects system");
 }
 
 static void test_rules_update_no_url(void) {
     /* rules_update.json 的 url 为 ""：update 应直接报错，不发任何请求。 */
-    cdc_rules_update_result_t out;
-    cdc_err_t e;
-    int rc = cdc_rules_update(&out, &e);
-    CHECK(rc != CDC_OK, "update with empty url fails (rc=%d)", rc);
+    cdc::RulesUpdateResult out;
+    cdc::Error e;
+    int rc = cdc::update_rules(&out, &e);
+    CHECK(rc != cdc::kOk, "update with empty url fails (rc=%d)", rc);
     CHECK(strstr(e.message, "没有配置") != NULL || strstr(e.message, "未配置") != NULL ||
               strstr(e.message, "远程规则") != NULL ||
               strstr(e.message, "WinHTTP") != NULL,
@@ -178,13 +177,9 @@ static void test_rules_update_no_url(void) {
 }
 
 static void test_rules_config(void) {
-    char *url = NULL, *hash = NULL;
-    cdc_err_t e;
-    int rc = cdc_rules_config(&url, &hash, &e);
-    CHECK(rc == CDC_OK, "rules_config rc=%d (%s)", rc, e.message);
-    CHECK(url && url[0] == '\0', "config url empty (got %s)", url ? url : "(null)");
-    free(url);
-    free(hash);
+    cdc::RulesConfig cfg = cdc::rules_config();
+    CHECK(cfg.url.empty(), "config url empty (got %s)", cfg.url.c_str());
+    CHECK(!cfg.blake3.has_value(), "config blake3 empty");
 }
 
 /* ---------------- timeutil / logs ---------------- */

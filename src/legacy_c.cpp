@@ -13,6 +13,7 @@
 #include "shred.h"
 #include "cdc_process.h"
 #include "indextask.h"
+#include "rules.h"
 
 void cdc_err_init(cdc_err_t *err) { cdc::err_init(err); }
 void cdc_err_set(cdc_err_t *err, int code, const char *fmt, ...) {
@@ -716,3 +717,189 @@ int cdc_indextask_delete_task(char *msg, size_t cap, cdc_err_t *err) {
     return rc;
 }
 int cdc_indextask_selftest() { return cdc::indextask_selftest(); }
+
+// ---- rules 转发 ----
+void cdc_rule_free_members(cdc_rule_t *r) {
+    if (!r)
+        return;
+    free(r->key);
+    free(r->name);
+    free(r->tier);
+    free(r->kind);
+    free(r->describe);
+    free(r->warning);
+    free(r->note);
+    cdc_strvec_free(r->paths, r->npaths);
+    cdc_strvec_free(r->glob_dirs, r->nglob_dirs);
+    cdc_strvec_free(r->patterns, r->npatterns);
+    cdc_strvec_free(r->exclude, r->nexclude);
+    memset(r, 0, sizeof(*r));
+}
+void cdc_rules_free(cdc_rule_t *rules, size_t n) {
+    if (!rules)
+        return;
+    for (size_t i = 0; i < n; i++)
+        cdc_rule_free_members(&rules[i]);
+    free(rules);
+}
+namespace {
+char **dup_strvec(const std::vector<std::string> &v, size_t *out_n) {
+    *out_n = v.size();
+    if (v.empty())
+        return NULL;
+    char **a = (char **)calloc(v.size(), sizeof(char *));
+    if (!a)
+        return NULL;
+    for (size_t i = 0; i < v.size(); ++i) {
+        a[i] = dup_c(v[i]);
+        if (!a[i]) {
+            for (size_t j = 0; j < i; ++j)
+                free(a[j]);
+            free(a);
+            return NULL;
+        }
+    }
+    return a;
+}
+int fill_c_rule(const cdc::Rule &src, cdc_rule_t *dst) {
+    memset(dst, 0, sizeof(*dst));
+    dst->key = dup_c(src.key);
+    dst->name = dup_c(src.name);
+    dst->tier = dup_c(src.tier);
+    dst->kind = dup_c(src.kind);
+    dst->describe = dup_c(src.describe);
+    dst->warning = dup_c(src.warning);
+    dst->note = dup_c(src.note);
+    dst->paths = dup_strvec(src.paths, &dst->npaths);
+    dst->glob_dirs = dup_strvec(src.glob_dirs, &dst->nglob_dirs);
+    dst->patterns = dup_strvec(src.patterns, &dst->npatterns);
+    dst->exclude = dup_strvec(src.exclude, &dst->nexclude);
+    dst->min_age_minutes = src.min_age_minutes;
+    dst->requires_confirm = src.requires_confirm ? 1 : 0;
+    dst->prune_dirs = src.prune_dirs ? 1 : 0;
+    if (!dst->key || !dst->name || !dst->tier || !dst->kind || !dst->describe || !dst->warning ||
+        !dst->note || (!src.paths.empty() && !dst->paths) ||
+        (!src.glob_dirs.empty() && !dst->glob_dirs) ||
+        (!src.patterns.empty() && !dst->patterns) ||
+        (!src.exclude.empty() && !dst->exclude)) {
+        cdc_rule_free_members(dst);
+        return CDC_ERR_NOMEM;
+    }
+    return CDC_OK;
+}
+int rules_vec_to_c(const std::vector<cdc::Rule> &v, cdc_rule_t **out_rules, size_t *out_n,
+                   cdc_err_t *err) {
+    *out_rules = NULL;
+    *out_n = 0;
+    if (v.empty())
+        return CDC_OK;
+    auto *rules = (cdc_rule_t *)calloc(v.size(), sizeof(cdc_rule_t));
+    if (!rules) {
+        cdc::err_set(err, CDC_ERR_NOMEM, "out of memory");
+        return CDC_ERR_NOMEM;
+    }
+    for (size_t i = 0; i < v.size(); ++i) {
+        if (fill_c_rule(v[i], &rules[i]) != CDC_OK) {
+            cdc_rules_free(rules, i);
+            cdc::err_set(err, CDC_ERR_NOMEM, "out of memory");
+            return CDC_ERR_NOMEM;
+        }
+    }
+    *out_rules = rules;
+    *out_n = v.size();
+    return CDC_OK;
+}
+}  // namespace
+int cdc_rules_parse_text(const char *text, cdc_rule_t **out_rules, size_t *out_n,
+                         uint64_t *out_version, cdc_err_t *err) {
+    if (!out_rules || !out_n) {
+        cdc::err_set(err, CDC_ERR_INVALID_ARG, "NULL out param");
+        return CDC_ERR_INVALID_ARG;
+    }
+    std::vector<cdc::Rule> v;
+    int rc = cdc::parse_rules_text(text ? text : "", &v, out_version, err);
+    if (rc != CDC_OK)
+        return rc;
+    return rules_vec_to_c(v, out_rules, out_n, err);
+}
+int cdc_rules_load_all(cdc_rule_t **out_rules, size_t *out_n, cdc_err_t *err) {
+    if (!out_rules || !out_n) {
+        cdc::err_set(err, CDC_ERR_INVALID_ARG, "NULL out param");
+        return CDC_ERR_INVALID_ARG;
+    }
+    std::vector<cdc::Rule> v;
+    int rc = cdc::load_all_rules(&v, err);
+    if (rc != CDC_OK)
+        return rc;
+    return rules_vec_to_c(v, out_rules, out_n, err);
+}
+char *cdc_expand_env(const char *raw) { return dup_c(cdc::expand_env(raw ? raw : "")); }
+char *cdc_remote_rules_path() {
+    auto p = cdc::remote_rules_path();
+    return p ? dup_c(*p) : NULL;
+}
+char *cdc_remote_rules_backup_path() {
+    auto p = cdc::remote_rules_backup_path();
+    return p ? dup_c(*p) : NULL;
+}
+int cdc_rules_config(char **out_url, char **out_blake3, cdc_err_t *err) {
+    (void)err;
+    cdc::RulesConfig cfg = cdc::rules_config();
+    if (out_url)
+        *out_url = dup_c(cfg.url);
+    if (out_blake3)
+        *out_blake3 = cfg.blake3 ? dup_c(*cfg.blake3) : NULL;
+    return CDC_OK;
+}
+int cdc_rule_validate(const char *key, const char *kind, const char *tier, int has_command,
+                      int command_non_empty, const char **paths, size_t npaths,
+                      const char **glob_dirs, size_t nglob_dirs, cdc_err_t *err) {
+    std::vector<std::string> pv, gv;
+    pv.reserve(npaths);
+    gv.reserve(nglob_dirs);
+    for (size_t i = 0; i < npaths; i++)
+        pv.emplace_back(paths && paths[i] ? paths[i] : "");
+    for (size_t i = 0; i < nglob_dirs; i++)
+        gv.emplace_back(glob_dirs && glob_dirs[i] ? glob_dirs[i] : "");
+    return cdc::validate_rule(key ? key : "", kind ? kind : "", tier ? tier : "",
+                              has_command != 0, command_non_empty != 0, pv, gv, err);
+}
+int cdc_rules_validate_text(const char *text, cdc_err_t *err) {
+    return cdc::validate_rules_text(text ? text : "", err);
+}
+int cdc_rule_key_ok(const char *key) { return cdc::rule_key_ok(key ? key : "") ? 1 : 0; }
+int cdc_rule_path_allowed(const char *raw, char **out_err) {
+    if (out_err)
+        *out_err = NULL;
+    std::string why;
+    int rc = cdc::rule_path_allowed(raw ? raw : "", out_err ? &why : nullptr);
+    if (rc != CDC_OK && out_err)
+        *out_err = dup_c(why);
+    return rc;
+}
+int cdc_rules_update(cdc_rules_update_result_t *out, cdc_err_t *err) {
+    if (!out) {
+        cdc::err_set(err, CDC_ERR_INVALID_ARG, "out is NULL");
+        return CDC_ERR_INVALID_ARG;
+    }
+    memset(out, 0, sizeof(*out));
+    cdc::RulesUpdateResult res;
+    int rc = cdc::update_rules(&res, err);
+    if (rc != CDC_OK)
+        return rc;
+    out->accepted = res.accepted;
+    out->total = res.total;
+    out->message = dup_c(res.message);
+    return CDC_OK;
+}
+int cdc_rules_rollback(char **out_message, cdc_err_t *err) {
+    if (out_message)
+        *out_message = NULL;
+    std::string msg;
+    int rc = cdc::rollback_rules(&msg, err);
+    if (rc != CDC_OK)
+        return rc;
+    if (out_message)
+        *out_message = dup_c(msg);
+    return CDC_OK;
+}
