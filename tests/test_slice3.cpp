@@ -204,31 +204,26 @@ static void test_timeutil(void) {
 }
 
 static void test_logs(void) {
-    const char *lines[3] = { "开始清理", "清理：测试", "完成：测试" };
-    char *path = NULL;
-    cdc_err_t e;
-    int rc = cdc_write_log(lines, 3, &path, &e);
-    CHECK(rc == CDC_OK, "write_log rc=%d (%s)", rc, e.message);
-    CHECK(path != NULL, "write_log returns path");
-    free(path);
-    cdc_log_entry_t *entries = NULL;
-    size_t n = 0;
-    CHECK(cdc_logs_list(&entries, &n, &e) == CDC_OK && n >= 1, "logs_list >= 1");
+    const std::string lines[3] = {"开始清理", "清理：测试", "完成：测试"};
+    std::string path;
+    cdc::Error e;
+    int rc = cdc::write_log(lines, &path, &e);
+    CHECK(rc == cdc::kOk, "write_log rc=%d (%s)", rc, e.message);
+    CHECK(!path.empty(), "write_log returns path");
+    std::vector<cdc::LogEntry> entries;
+    CHECK(cdc::logs_list(&entries, &e) == cdc::kOk && !entries.empty(), "logs_list >= 1");
     int found_test = 0;
-    if (entries) {
-        for (size_t i = 0; i < n; i++) {
-            char *text = NULL;
-            if (cdc_log_read(entries[i].name, &text, NULL) == CDC_OK && text) {
-                if (strstr(text, "清理：测试")) found_test = 1;
-                free(text);
-            }
+    for (auto &en : entries) {
+        std::string text;
+        if (cdc::log_read(en.name, &text, nullptr) == cdc::kOk) {
+            if (text.find("清理：测试") != std::string::npos)
+                found_test = 1;
         }
     }
     CHECK(found_test, "logs_list/read finds the test log");
-    cdc_logs_list_free(entries, n);
     /* 非法名静默丢弃。 */
-    CHECK(cdc_append_line("../evil", "x") == CDC_OK, "append_line illegal name dropped silently");
-    CHECK(cdc_log_read("../evil", NULL, &e) != CDC_OK, "log_read rejects traversal");
+    CHECK(cdc::append_line("../evil", "x") == cdc::kOk, "append_line illegal name dropped silently");
+    CHECK(cdc::log_read("../evil", nullptr, &e) != cdc::kOk, "log_read rejects traversal");
 }
 
 /* ---------------- im classify（对照 Rust im.rs tests） ---------------- */

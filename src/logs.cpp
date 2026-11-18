@@ -1,7 +1,6 @@
+/* logs.cpp — 清理日志，移植自 Rust 版 desktop/src/logs.rs。 */
 #include "logs.h"
-#include "raii.h"
-#include "safety.h"
-#include "timeutil.h"
+
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
@@ -9,6 +8,11 @@
 #include <string>
 #include <string_view>
 #include <vector>
+
+#include "raii.h"
+#include "safety.h"
+#include "timeutil.h"
+
 #ifdef _WIN32
 #include <windows.h>
 #else
@@ -16,24 +20,12 @@
 #include <sys/stat.h>
 #endif
 
+namespace cdc {
 namespace {
-using cdc::kErrInvalidArg;
-using cdc::kErrIo;
-using cdc::kErrNoMem;
-using cdc::kErrNotFound;
-using cdc::kOk;
-void err(cdc_err_t *e, int code, const char *msg) {
+
+void err(Error *e, int code, const char *msg) {
     if (e)
-        cdc::err_set(e, code, "%s", msg);
-}
-char *cstr(const std::string &s) {
-    char *p = (char *)std::malloc(s.size() + 1);
-    if (!p)
-        return nullptr;
-    if (!s.empty())
-        std::memcpy(p, s.data(), s.size());
-    p[s.size()] = 0;
-    return p;
+        err_set(e, code, "%s", msg);
 }
 std::string join(const std::string &d, std::string_view n) {
     std::string p = d;
@@ -49,7 +41,7 @@ std::string join(const std::string &d, std::string_view n) {
 }
 bool regular(const std::string &p) {
 #ifdef _WIN32
-    auto w = cdc::utf8_to_wide(p);
+    auto w = utf8_to_wide(p);
     if (!w)
         return false;
     DWORD a = GetFileAttributesW(w->c_str());
@@ -62,7 +54,7 @@ bool regular(const std::string &p) {
 }
 bool appendable(const std::string &p) {
 #ifdef _WIN32
-    auto w = cdc::utf8_to_wide(p);
+    auto w = utf8_to_wide(p);
     if (!w)
         return false;
     DWORD a = GetFileAttributesW(w->c_str());
@@ -76,10 +68,9 @@ bool appendable(const std::string &p) {
     return S_ISREG(s.st_mode);
 #endif
 }
-bool valid(const char *n) {
-    if (!n || !*n)
+bool valid(std::string_view s) {
+    if (s.empty())
         return false;
-    std::string_view s(n);
     return s.find('/') == s.npos && s.find('\\') == s.npos && s.find("..") == s.npos;
 }
 struct Item {
@@ -87,7 +78,7 @@ struct Item {
     uint64_t mtime;
 };
 int items(const std::string &d, std::vector<Item> &v, bool logs) {
-    return cdc::enum_dir(d, [&](const cdc::DirEntry &e) {
+    return enum_dir(d, [&](const DirEntry &e) {
         if (e.is_dir || e.is_symlink ||
             (logs && (e.name.size() < 4 || e.name.substr(e.name.size() - 4) != ".log")))
             return 0;
@@ -104,7 +95,7 @@ void rotate(const std::string &d) {
     std::stable_sort(v.begin(), v.end(), [](auto &a, auto &b) { return a.mtime > b.mtime; });
     for (size_t i = 100; i < v.size(); ++i) {
 #ifdef _WIN32
-        auto w = cdc::utf8_to_wide(v[i].path);
+        auto w = utf8_to_wide(v[i].path);
         if (w)
             DeleteFileW(w->c_str());
 #else
@@ -152,12 +143,12 @@ std::string lossy(const std::vector<unsigned char> &b) {
     }
     return o;
 }
-} // namespace
-extern "C" {
-char *cdc_app_data_dir(void) {
-    auto d = cdc::log_dir();
+}  // namespace
+
+std::optional<std::string> app_data_dir() {
+    auto d = log_dir();
     if (!d)
-        return nullptr;
+        return std::nullopt;
     std::string s = *d;
 #ifdef _WIN32
     if (s.size() >= 5 && s.compare(s.size() - 5, 5, "\\logs") == 0)
@@ -166,47 +157,38 @@ char *cdc_app_data_dir(void) {
     if (s.size() >= 5 && s.compare(s.size() - 5, 5, "/logs") == 0)
         s.resize(s.size() - 5);
 #endif
-    return cstr(s);
+    return s;
 }
-char *cdc_logs_dir(void) {
-    auto d = cdc::log_dir();
-    return d ? cstr(*d) : nullptr;
-}
-int cdc_write_log(const char **lines, size_t n, char **out, cdc_err_t *e) {
+
+std::optional<std::string> logs_dir() { return log_dir(); }
+
+int write_log(std::span<const std::string> lines, std::string *out, Error *e) {
     if (e)
-        cdc::err_init(e);
-    if (out)
-        *out = nullptr;
-    auto d = cdc::log_dir();
+        err_init(e);
+    auto d = log_dir();
     if (!d) {
         err(e, kErrIo, "cannot determine log dir");
         return kErrIo;
     }
-    char *st = cdc_stamp();
-    if (!st) {
-        err(e, kErrNoMem, "out of memory");
-        return kErrNoMem;
-    }
-    std::string stamp(st);
-    free(st);
+    std::string st = stamp();
     std::string p;
     for (int i = 0;; ++i) {
-        p = join(*d, stamp) + (i ? "_" + std::to_string(i) : "") + ".log";
-        auto q = cdc::fopen_utf8(p.c_str(), "rb");
+        p = join(*d, st) + (i ? "_" + std::to_string(i) : "") + ".log";
+        auto q = fopen_utf8(p.c_str(), "rb");
         if (!q)
             break;
         if (i >= 10000) {
-            cdc::err_set(e, kErrIo, "too many log files for %s", stamp.c_str());
+            err_set(e, kErrIo, "too many log files for %s", st.c_str());
             return kErrIo;
         }
     }
-    auto f = cdc::fopen_utf8(p.c_str(), "wb");
+    auto f = fopen_utf8(p.c_str(), "wb");
     if (!f) {
-        cdc::err_set(e, kErrIo, "cannot create log file: %s", p.c_str());
+        err_set(e, kErrIo, "cannot create log file: %s", p.c_str());
         return kErrIo;
     }
-    for (size_t i = 0; i < n; ++i) {
-        std::string s = lines && lines[i] ? lines[i] : "";
+    for (const std::string &line : lines) {
+        std::string s = line;
         trim(s);
         if (fwrite(s.data(), 1, s.size(), f.get()) != s.size() || fputc('\n', f.get()) == EOF) {
             err(e, kErrIo, "cannot write log file");
@@ -222,43 +204,37 @@ int cdc_write_log(const char **lines, size_t n, char **out, cdc_err_t *e) {
         return kErrIo;
     }
     rotate(*d);
-    if (out) {
-        *out = cstr(p);
-        if (!*out) {
-            err(e, kErrNoMem, "out of memory");
-            return kErrNoMem;
-        }
-    }
-    return 0;
+    if (out)
+        *out = p;
+    return kOk;
 }
-int cdc_append_line(const char *n, const char *l) {
+
+int append_line(std::string_view n, std::string_view l) {
     if (!valid(n))
-        return 0;
-    auto d = cdc::log_dir();
+        return kOk;
+    auto d = log_dir();
     if (!d)
-        return 0;
+        return kOk;
     std::string p = join(*d, n);
     if (!appendable(p))
-        return 0;
-    auto f = cdc::fopen_utf8(p.c_str(), "ab");
+        return kOk;
+    auto f = fopen_utf8(p.c_str(), "ab");
     if (!f)
-        return 0;
-    const char *s = l ? l : "";
-    size_t z = strlen(s);
-    if (fwrite(s, 1, z, f.get()) == z && fputc('\n', f.get()) != EOF)
+        return kOk;
+    if (fwrite(l.data(), 1, l.size(), f.get()) == l.size() && fputc('\n', f.get()) != EOF)
         fflush(f.get());
-    return 0;
+    return kOk;
 }
-int cdc_logs_list(cdc_log_entry_t **out, size_t *n, cdc_err_t *e) {
+
+int logs_list(std::vector<LogEntry> *out, Error *e) {
     if (e)
-        cdc::err_init(e);
-    if (!out || !n) {
+        err_init(e);
+    if (!out) {
         err(e, kErrInvalidArg, "NULL out param");
         return kErrInvalidArg;
     }
-    *out = nullptr;
-    *n = 0;
-    auto d = cdc::log_dir();
+    out->clear();
+    auto d = log_dir();
     if (!d) {
         err(e, kErrIo, "cannot determine log dir");
         return kErrIo;
@@ -269,46 +245,29 @@ int cdc_logs_list(cdc_log_entry_t **out, size_t *n, cdc_err_t *e) {
         return kErrIo;
     }
     std::stable_sort(v.begin(), v.end(), [](auto &a, auto &b) { return a.mtime > b.mtime; });
-    auto a = (cdc_log_entry_t *)malloc(v.size() * sizeof(cdc_log_entry_t));
-    if (!a && !v.empty()) {
-        err(e, kErrNoMem, "out of memory");
-        return kErrNoMem;
-    }
-    for (size_t i = 0; i < v.size(); ++i) {
-        a[i].name = cstr(v[i].name);
-        if (!a[i].name) {
-            for (size_t j = 0; j < i; ++j)
-                free(a[j].name);
-            free(a);
-            err(e, kErrNoMem, "out of memory");
-            return kErrNoMem;
-        }
+    out->reserve(v.size());
+    for (auto &it : v) {
+        LogEntry en;
+        en.name = it.name;
 #ifdef _WIN32
-        a[i].size = 0;
-        auto w = cdc::utf8_to_wide(v[i].path);
+        en.size = 0;
+        auto w = utf8_to_wide(it.path);
         WIN32_FILE_ATTRIBUTE_DATA x{};
         if (w && GetFileAttributesExW(w->c_str(), GetFileExInfoStandard, &x))
-            a[i].size = ((uint64_t)x.nFileSizeHigh << 32) | x.nFileSizeLow;
+            en.size = ((uint64_t)x.nFileSizeHigh << 32) | x.nFileSizeLow;
 #else
         struct stat s{};
-        a[i].size = lstat(v[i].path.c_str(), &s) == 0 ? (uint64_t)s.st_size : 0;
+        en.size = lstat(it.path.c_str(), &s) == 0 ? (uint64_t)s.st_size : 0;
 #endif
-        a[i].mtime = v[i].mtime;
+        en.mtime = it.mtime;
+        out->push_back(std::move(en));
     }
-    *out = a;
-    *n = v.size();
-    return 0;
+    return kOk;
 }
-void cdc_logs_list_free(cdc_log_entry_t *a, size_t n) {
-    if (!a)
-        return;
-    for (size_t i = 0; i < n; ++i)
-        free(a[i].name);
-    free(a);
-}
-int cdc_log_read(const char *n, char **out, cdc_err_t *e) {
+
+int log_read(std::string_view n, std::string *out, Error *e) {
     if (e)
-        cdc::err_init(e);
+        err_init(e);
     if (!valid(n)) {
         err(e, kErrInvalidArg, "日志名不合法");
         return kErrInvalidArg;
@@ -317,8 +276,8 @@ int cdc_log_read(const char *n, char **out, cdc_err_t *e) {
         err(e, kErrInvalidArg, "out_text is NULL");
         return kErrInvalidArg;
     }
-    *out = nullptr;
-    auto d = cdc::log_dir();
+    out->clear();
+    auto d = log_dir();
     if (!d) {
         err(e, kErrIo, "cannot determine log dir");
         return kErrIo;
@@ -328,7 +287,7 @@ int cdc_log_read(const char *n, char **out, cdc_err_t *e) {
         err(e, kErrNotFound, "日志不存在");
         return kErrNotFound;
     }
-    auto f = cdc::fopen_utf8(p.c_str(), "rb");
+    auto f = fopen_utf8(p.c_str(), "rb");
     if (!f) {
         err(e, kErrNotFound, "日志不存在");
         return kErrNotFound;
@@ -346,12 +305,8 @@ int cdc_log_read(const char *n, char **out, cdc_err_t *e) {
             break;
         }
     }
-    std::string s = lossy(b);
-    *out = cstr(s);
-    if (!*out) {
-        err(e, kErrNoMem, "out of memory");
-        return kErrNoMem;
-    }
-    return 0;
+    *out = lossy(b);
+    return kOk;
 }
-}
+
+}  // namespace cdc

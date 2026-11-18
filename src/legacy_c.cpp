@@ -4,9 +4,12 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <string_view>
+#include <vector>
 
 #include "util.h"
 #include "timeutil.h"
+#include "logs.h"
 
 void cdc_err_init(cdc_err_t *err) { cdc::err_init(err); }
 void cdc_err_set(cdc_err_t *err, int code, const char *fmt, ...) {
@@ -384,3 +387,89 @@ cdc_local_time_t cdc_local_time(uint64_t seconds) {
 char *cdc_month_label(uint64_t seconds) { return dup_c(cdc::month_label(seconds)); }
 char *cdc_stamp(void) { return dup_c(cdc::stamp()); }
 char *cdc_human_stamp(uint64_t seconds) { return dup_c(cdc::human_stamp(seconds)); }
+
+// ---- logs 转发 ----
+char *cdc_app_data_dir(void) {
+    auto d = cdc::app_data_dir();
+    return d ? dup_c(*d) : NULL;
+}
+char *cdc_logs_dir(void) {
+    auto d = cdc::logs_dir();
+    return d ? dup_c(*d) : NULL;
+}
+int cdc_write_log(const char **lines, size_t nlines, char **out_path, cdc_err_t *err) {
+    std::vector<std::string> v;
+    v.reserve(nlines);
+    for (size_t i = 0; i < nlines; i++)
+        v.emplace_back(lines && lines[i] ? lines[i] : "");
+    std::string out;
+    std::string *outp = out_path ? &out : nullptr;
+    int rc = cdc::write_log(v, outp, err);
+    if (rc == CDC_OK && out_path) {
+        *out_path = dup_c(out);
+        if (!*out_path) {
+            cdc::err_set(err, CDC_ERR_NOMEM, "out of memory");
+            return CDC_ERR_NOMEM;
+        }
+    }
+    return rc;
+}
+int cdc_append_line(const char *name, const char *line) {
+    return cdc::append_line(name ? name : "", line ? line : "");
+}
+int cdc_logs_list(cdc_log_entry_t **out, size_t *out_n, cdc_err_t *err) {
+    if (!out || !out_n) {
+        cdc::err_set(err, CDC_ERR_INVALID_ARG, "NULL out param");
+        return CDC_ERR_INVALID_ARG;
+    }
+    *out = nullptr;
+    *out_n = 0;
+    std::vector<cdc::LogEntry> v;
+    int rc = cdc::logs_list(&v, err);
+    if (rc != CDC_OK)
+        return rc;
+    auto *a = (cdc_log_entry_t *)malloc(v.size() * sizeof(cdc_log_entry_t));
+    if (!a && !v.empty()) {
+        cdc::err_set(err, CDC_ERR_NOMEM, "out of memory");
+        return CDC_ERR_NOMEM;
+    }
+    for (size_t i = 0; i < v.size(); ++i) {
+        a[i].name = dup_c(v[i].name);
+        if (!a[i].name) {
+            for (size_t j = 0; j < i; ++j)
+                free(a[j].name);
+            free(a);
+            cdc::err_set(err, CDC_ERR_NOMEM, "out of memory");
+            return CDC_ERR_NOMEM;
+        }
+        a[i].size = v[i].size;
+        a[i].mtime = v[i].mtime;
+    }
+    *out = a;
+    *out_n = v.size();
+    return CDC_OK;
+}
+void cdc_logs_list_free(cdc_log_entry_t *a, size_t n) {
+    if (!a)
+        return;
+    for (size_t i = 0; i < n; ++i)
+        free(a[i].name);
+    free(a);
+}
+int cdc_log_read(const char *name, char **out_text, cdc_err_t *err) {
+    if (!out_text) {
+        cdc::err_set(err, CDC_ERR_INVALID_ARG, "out_text is NULL");
+        return CDC_ERR_INVALID_ARG;
+    }
+    *out_text = nullptr;
+    std::string s;
+    int rc = cdc::log_read(name ? name : "", &s, err);
+    if (rc != CDC_OK)
+        return rc;
+    *out_text = dup_c(s);
+    if (!*out_text) {
+        cdc::err_set(err, CDC_ERR_NOMEM, "out of memory");
+        return CDC_ERR_NOMEM;
+    }
+    return CDC_OK;
+}

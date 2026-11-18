@@ -439,7 +439,7 @@ std::vector<std::string> reg_list_subkeys(HKEY key) {
 
 // 删除前先用 reg.exe 导出备份到 logs\backups\reg\{label}_{stamp}.reg。
 bool backup_key(const char *hive, const std::string &path, const char *label) {
-    std::string logs = take(cdc_logs_dir());
+    std::string logs = logs_dir().value_or(std::string());
     if (logs.empty()) return false;
     std::string dir = logs + "\\backups\\reg";
     if (std::optional<std::wstring> wd = utf8_to_wide(dir)) {
@@ -857,8 +857,8 @@ PrivacyReport privacy_clean(std::span<const char *const> ids) {
     std::string summary = format("完成：文件 %lld 个，数据库 %lld 个，注册表记录 %lld 条",
                                  static_cast<long long>(out.files), static_cast<long long>(out.sql),
                                  static_cast<long long>(out.registry));
-    const char *lines[3] = {"开始清理", "清理：隐私痕迹", summary.c_str()};
-    cdc_write_log(lines, 3, nullptr, nullptr);
+    const std::string lines[3] = {"开始清理", "清理：隐私痕迹", summary};
+    write_log(lines, nullptr, nullptr);
     return out;
 }
 

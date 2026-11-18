@@ -152,3 +152,19 @@ cdc_local_time_t cdc_local_time(uint64_t seconds);
 char *cdc_month_label(uint64_t seconds);
 char *cdc_stamp(void);
 char *cdc_human_stamp(uint64_t seconds);
+
+// ---- logs ----
+char *cdc_app_data_dir(void);
+char *cdc_logs_dir(void);
+int cdc_write_log(const char **lines, size_t nlines, char **out_path, cdc_err_t *err);
+int cdc_append_line(const char *name, const char *line);
+
+typedef struct {
+    char *name;
+    uint64_t size;
+    uint64_t mtime; /* Unix 秒 */
+} cdc_log_entry_t;
+
+int cdc_logs_list(cdc_log_entry_t **out, size_t *out_n, cdc_err_t *err);
+void cdc_logs_list_free(cdc_log_entry_t *entries, size_t n);
+int cdc_log_read(const char *name, char **out_text, cdc_err_t *err);
