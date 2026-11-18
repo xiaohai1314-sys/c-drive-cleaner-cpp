@@ -54,9 +54,12 @@ export async function invoke<T>(
 export function convertFileSrc(path: string, protocol = "asset"): string {
   const fn = globalTauri()?.core?.convertFileSrc;
   if (fn) return fn(path, protocol);
-  // 桥模式：imthumb 自定义协议尚未接入宿主的文件服务（见
-  // docs/frontend-bridge.md「已知缺口」），先返回 ""（缩略图暂不显示）。
-  void path;
+  // 桥模式：imthumb 走宿主在 https://cdc.local/__imthumb__ 上挂的受控路由，
+  // 只服务 im_scan 返回过的路径，C 侧做 XOR 0x05 解密（见
+  // docs/frontend-bridge.md「已知缺口」第 1 条）。
+  if (hasBridge() && protocol === "imthumb") {
+    return `https://cdc.local/__imthumb__?path=${encodeURIComponent(path)}`;
+  }
   return "";
 }
 
@@ -74,9 +77,9 @@ export function currentWindow(): TauriWindowHandle | undefined {
 }
 
 export async function pickPaths(kind: "file" | "folder"): Promise<string[]> {
-  // 桥模式：原生文件对话框尚未接入，暂返回 []（粉碎页选文件入口不可用），
-  // 见 docs/frontend-bridge.md「已知缺口」。
-  if (hasBridge()) return [];
+  // 桥模式：宿主的 pick_paths 命令弹出原生文件对话框（IFileOpenDialog），
+  // 用户取消返回 []。
+  if (hasBridge()) return bridgeInvoke<string[]>("pick_paths", { kind });
   const open = globalTauri()?.dialog?.open;
   if (!open) return [];
   const picked = await open(

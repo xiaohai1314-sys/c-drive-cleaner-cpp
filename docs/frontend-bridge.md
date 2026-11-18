@@ -98,14 +98,17 @@ COM 部分换成 `webview_bind` 回调（在回调里按 `cmd` 查表分发，
 
 ## 已知缺口（不在本切片范围，留给后续）
 
-1. **`convertFileSrc` / `imthumb`**：Rust 版用 Tauri 自定义协议
-   `imthumb://` 解密微信 `.dat` 缩略图。桥模式下 `convertFileSrc`
-   返回 `""`（ImageTile 缩略图暂不显示）。接法：宿主的资源映射加一
-   条受控路由（如 `https://cdc.local/__file__/…`），只服务此前
-   `im_scan` 返回过的路径，并在 C 侧做 XOR 0x05 解密；不要无限制
-   开放本地文件读取。
-2. **`pickPaths`**：桥模式返回 `[]`（粉碎页选文件入口不可用）。接法：
-   宿主用 `GetOpenFileNameW` 实现原生文件对话框，再以命令形式暴露。
+1. **`convertFileSrc` / `imthumb`（已实现，2026-11-18）**：宿主的资源映射
+   加了受控路由 `https://cdc.local/__imthumb__?path=<encodeURIComponent 后的路径>`，
+   只服务此前 `im_scan` 返回过的路径（`im_is_scanned` 守门），并在 C 侧
+   调 `im_thumbnail` 做 XOR 0x05 解密后按原图 MIME 回包；不是图片或不在
+   扫描结果里一律 404。前端 `convertFileSrc(path, "imthumb")` 在桥模式下
+   返回该 URL（见 `web/src/api/tauri.ts`）。
+2. **`pickPaths`（已实现，2026-11-18）**：宿主命令 `pick_paths`
+   （见 `docs/bridge-commands.md`「宿主侧补充命令」）用 `IFileOpenDialog`
+   弹出原生文件对话框（多选；`kind: "folder"` 时加 `FOS_PICKFOLDERS`），
+   用户取消返回 `[]`。对话框跑在桥的工作线程上，命令内自己
+   `CoInitializeEx`。
 3. **长命令超时**：默认 5 分钟；`scan_dups` 全盘大库、首次
    `index_rebuild` 可能更久，调用方按需传 `timeoutMs`（或 0 不限）。
    超时后命令在 C 侧继续跑（只断前端等待），重复点“立即同步”前

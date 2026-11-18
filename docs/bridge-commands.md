@@ -98,6 +98,7 @@ C 桥的命令名、参数名、返回值 JSON 形态与 Tauri 版**一字不改
 | `window_minimize` | — | `null` | 最小化主窗口（供 `WindowBar.vue`） |
 | `window_maximize` | — | `null` | 最大化/还原切换 |
 | `window_close` | — | `null` | 关闭主窗口 |
+| `pick_paths` | `kind: "file" \| "folder"` | `string[]` | 原生文件/文件夹选择对话框（供 `ShredPage.vue`）；用户取消返回 `[]` |
 
 ## 与 Rust 版行为不一致的地方（已知）
 
@@ -108,10 +109,9 @@ C 桥的命令名、参数名、返回值 JSON 形态与 Tauri 版**一字不改
    超时（`bridge.ts` 可按命令改），`scan_dups` / `scan_big` /
    `index_rebuild` 等长命令调用方应传更大的 `timeoutMs`（见
    `docs/frontend-bridge.md`）。
-3. **`imthumb` / `convertFileSrc`**：Rust 版用 Tauri 自定义协议
-   `imthumb://` 解密微信 `.dat` 缩略图；C 桥的 JSON 通道不覆盖它，
-   前端在桥模式下 `convertFileSrc` 返回 `""`（缩略图暂不显示），
-   待宿主实现自定义 scheme 文件服务后接上（见
-   `docs/frontend-bridge.md`「已知缺口」）。
-4. **`pickPaths`**：Rust 版用 Tauri dialog；桥模式暂返回 `[]`（粉碎页
-   选文件入口不可用），待宿主接原生文件对话框。
+3. **`imthumb` / `convertFileSrc`（已实现，2026-11-18）**：宿主在
+   `https://cdc.local/__imthumb__?path=…` 挂了受控路由，只服务
+   `im_scan` 返回过的路径，C 侧做 XOR 0x05 解密后按原图 MIME 回包；
+   前端 `convertFileSrc(path, "imthumb")` 在桥模式下返回该 URL。
+4. **`pickPaths`（已实现，2026-11-18）**：宿主命令 `pick_paths`
+   （见下「宿主侧补充命令」）弹出原生文件对话框，用户取消返回 `[]`。

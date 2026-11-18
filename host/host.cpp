@@ -25,6 +25,9 @@
 #include "bridge.h"
 #include "security.h"
 
+#include "cJSON.h"
+#include "im.h"
+
 #include <WebView2.h>
 
 #ifdef __MINGW32__
@@ -32,6 +35,7 @@
 #endif
 
 #include <shlwapi.h>
+#include <shobjidl.h>
 #include <stdlib.h>
 #include <string.h>
 #include <wctype.h>
@@ -42,6 +46,7 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 #ifdef _MSC_VER
 #pragma comment(lib, "shlwapi.lib")
@@ -336,6 +341,78 @@ class ResourceHandler final
   }
 
  private:
+  // __imthumb__ 路由：https://cdc.local/__imthumb__?path=<encodeURIComponent 后的路径>。
+  // 只服务此前 im_scan 返回过的路径（im_is_scanned 守门），C 侧做 XOR 0x05
+  // 解密后按原图 MIME 回包；不是图片 / 不在扫描结果里一律 404。不要无限制
+  // 开放本地文件读取。
+  static bool imthumb_path_from_query(const std::wstring &query,
+                                      std::string *out) {
+    size_t pos = query.find(L"path=");
+    if (pos == std::wstring::npos) return false;
+    size_t begin = pos + 5;
+    size_t end = query.find(L'&', begin);
+    if (end == std::wstring::npos) end = query.size();
+    size_t hash = query.find(L'#', begin);
+    if (hash != std::wstring::npos && hash < end) end = hash;
+    auto hex = [](wchar_t c) -> int {
+      if (c >= L'0' && c <= L'9') return c - L'0';
+      if (c >= L'a' && c <= L'f') return c - L'a' + 10;
+      if (c >= L'A' && c <= L'F') return c - L'A' + 10;
+      return -1;
+    };
+    out->clear();
+    for (size_t i = begin; i < end; ++i) {
+      wchar_t ch = query[i];
+      if (ch == L'%' && i + 2 < end) {
+        int hi = hex(query[i + 1]);
+        int lo = hex(query[i + 2]);
+        if (hi < 0 || lo < 0) return false;
+        out->push_back(static_cast<char>((hi << 4) | lo));
+        i += 2;
+      } else if (ch < 0x80) {
+        out->push_back(static_cast<char>(ch));
+      } else if (ch < 0x800) {
+        // encodeURIComponent 不会原样发出非 ASCII 字符，防一手仍按 UTF-8 编码。
+        out->push_back(static_cast<char>(0xC0 | (ch >> 6)));
+        out->push_back(static_cast<char>(0x80 | (ch & 0x3F)));
+      } else {
+        out->push_back(static_cast<char>(0xE0 | (ch >> 12)));
+        out->push_back(static_cast<char>(0x80 | ((ch >> 6) & 0x3F)));
+        out->push_back(static_cast<char>(0x80 | (ch & 0x3F)));
+      }
+    }
+    return !out->empty();
+  }
+
+  void serve_imthumb(const std::wstring &query,
+                     ICoreWebView2WebResourceRequestedEventArgs *args) {
+    std::string path;
+    if (!imthumb_path_from_query(query, &path) || !cdc::im_is_scanned(path)) {
+      respond(args, 404, L"Not Found", L"text/plain", nullptr);
+      return;
+    }
+    const char *mime = nullptr;
+    std::vector<uint8_t> data;
+    cdc::Error err;
+    if (cdc::im_thumbnail(path, &mime, &data, &err) != 1 || !mime ||
+        data.empty()) {
+      respond(args, 404, L"Not Found", L"text/plain", nullptr);
+      return;
+    }
+    IStream *stream =
+        SHCreateMemStream(data.data(), static_cast<UINT>(data.size()));
+    if (!stream) {
+      respond(args, 500, L"Internal Server Error", L"text/plain", nullptr);
+      return;
+    }
+    // mime 只有 image/jpeg/png/gif/webp/bmp 几种 ASCII 值，直接加宽。
+    std::wstring content_type;
+    for (const char *p = mime; *p; ++p)
+      content_type.push_back(static_cast<wchar_t>(static_cast<unsigned char>(*p)));
+    respond(args, 200, L"OK", content_type.c_str(), stream);
+    stream->Release();
+  }
+
   void serve(const std::wstring &uri,
              ICoreWebView2WebResourceRequestedEventArgs *args) {
     constexpr std::wstring_view kOrigin = L"https://cdc.local";
@@ -344,6 +421,7 @@ class ResourceHandler final
         !cdc::host::ascii_iequals(request.substr(0, kOrigin.size()), kOrigin))
       return;
     std::wstring rel;
+    std::wstring query;
     if (request.size() == kOrigin.size()) {
       rel = L"index.html";
     } else if (request[kOrigin.size()] == L'/') {
@@ -354,7 +432,15 @@ class ResourceHandler final
       return;
     }
     size_t q = rel.find_first_of(L"?#");
-    if (q != std::wstring::npos) rel = rel.substr(0, q);
+    if (q != std::wstring::npos) {
+      // '?' 后是 query，'#' 后是 fragment（浏览器本不发送 fragment，防一手）。
+      if (rel[q] == L'?') query = rel.substr(q + 1);
+      rel = rel.substr(0, q);
+    }
+    if (rel == L"__imthumb__") {
+      serve_imthumb(query, args);
+      return;
+    }
     if (rel.empty() || rel.back() == L'/') rel += L"index.html";
     rel = url_decode_path(rel);
     for (auto &ch : rel) {
@@ -624,6 +710,15 @@ void create_controller() {
   controller->Release();
 }
 
+std::string wide_to_utf8_string(const wchar_t *wstr) {
+  if (!wstr) return {};
+  int len = WideCharToMultiByte(CP_UTF8, 0, wstr, -1, nullptr, 0, nullptr, nullptr);
+  if (len <= 1) return {};
+  std::string out(static_cast<size_t>(len - 1), '\0');
+  WideCharToMultiByte(CP_UTF8, 0, wstr, -1, out.data(), len, nullptr, nullptr);
+  return out;
+}
+
 // ---------------------------------------------------------------------------
 // 宿主命令 window_minimize / window_maximize / window_close。
 // ---------------------------------------------------------------------------
@@ -661,6 +756,93 @@ int window_close(const char *args_json, char **out_json, char **out_error) {
   PostMessageW(g_hwnd, WM_CLOSE, 0, 0);
   *out_json = host_strdup("null");
   return *out_json ? 0 : -1;
+}
+
+// 宿主命令 pick_paths：原生文件/文件夹选择对话框（粉碎页入口）。
+// args: {"kind": "file" | "folder"}，返回选中路径的 JSON 数组；用户取消返回 []。
+// 对话框跑在桥的工作线程上：线程本身没初始化 COM，CoInitializeEx 由这里负责。
+int pick_paths_impl(bool folders, char **out_json, char **out_error) {
+  IFileOpenDialog *dlg = nullptr;
+  HRESULT hr = CoCreateInstance(CLSID_FileOpenDialog, nullptr,
+                                CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&dlg));
+  if (FAILED(hr) || !dlg) {
+    *out_error = host_strdup("无法打开文件对话框");
+    return -1;
+  }
+  DWORD opts = FOS_ALLOWMULTISELECT | FOS_FILEMUSTEXIST | FOS_PATHMUSTEXIST;
+  if (folders) opts |= FOS_PICKFOLDERS;
+  dlg->SetOptions(opts);
+  dlg->SetTitle(folders ? L"选择要粉碎的文件夹" : L"选择要粉碎的文件");
+  hr = dlg->Show(g_hwnd);
+  cJSON *arr = cJSON_CreateArray();
+  if (!arr) {
+    *out_error = host_strdup("内存不足");
+    dlg->Release();
+    return -1;
+  }
+  if (hr == HRESULT_FROM_WIN32(ERROR_CANCELLED)) {
+    // 用户取消：按 Tauri dialog.open 的约定返回空数组。
+  } else if (FAILED(hr)) {
+    *out_error = host_strdup("文件对话框失败");
+    cJSON_Delete(arr);
+    dlg->Release();
+    return -1;
+  } else {
+    IShellItemArray *results = nullptr;
+    if (SUCCEEDED(dlg->GetResults(&results)) && results) {
+      DWORD count = 0;
+      if (SUCCEEDED(results->GetCount(&count))) {
+        for (DWORD i = 0; i < count; ++i) {
+          IShellItem *item = nullptr;
+          if (FAILED(results->GetItemAt(i, &item)) || !item) continue;
+          LPWSTR path = nullptr;
+          if (SUCCEEDED(item->GetDisplayName(SIGDN_FILESYSPATH, &path)) &&
+              path) {
+            std::string utf8 = wide_to_utf8_string(path);
+            CoTaskMemFree(path);
+            if (!utf8.empty()) {
+              cJSON *s = cJSON_CreateString(utf8.c_str());
+              if (s) cJSON_AddItemToArray(arr, s);
+            }
+          }
+          item->Release();
+        }
+      }
+      results->Release();
+    }
+  }
+  dlg->Release();
+  char *printed = cJSON_PrintUnformatted(arr);
+  cJSON_Delete(arr);
+  if (!printed) {
+    *out_error = host_strdup("内存不足");
+    return -1;
+  }
+  *out_json = host_strdup(printed);
+  cJSON_free(printed);
+  if (!*out_json) {
+    *out_error = host_strdup("内存不足");
+    return -1;
+  }
+  return 0;
+}
+
+int pick_paths(const char *args_json, char **out_json, char **out_error) {
+  std::string kind = "file";
+  if (args_json && *args_json) {
+    cJSON *args = cJSON_Parse(args_json);
+    if (args) {
+      cJSON *k = cJSON_GetObjectItemCaseSensitive(args, "kind");
+      if (cJSON_IsString(k) && k->valuestring) kind = k->valuestring;
+      cJSON_Delete(args);
+    }
+  }
+  HRESULT hr = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+  bool com_init = SUCCEEDED(hr);
+  // RPC_E_CHANGED_MODE：线程已是 MTA，继续用（对话框仍可工作）。
+  int rc = pick_paths_impl(kind == "folder", out_json, out_error);
+  if (com_init) CoUninitialize();
+  return rc;
 }
 
 // ---------------------------------------------------------------------------
@@ -711,6 +893,7 @@ extern "C" int cdc_host_run(HINSTANCE instance, int cmd_show) {
   cdc_bridge_register("window_minimize", window_minimize);
   cdc_bridge_register("window_maximize", window_maximize);
   cdc_bridge_register("window_close", window_close);
+  cdc_bridge_register("pick_paths", pick_paths);
 
   if (FAILED(ensure_com_sta())) return 1;
   // 建窗前启动环境创建（已预热过时是空操作）；浏览器进程拉起与
