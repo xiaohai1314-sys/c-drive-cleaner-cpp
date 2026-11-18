@@ -92,6 +92,7 @@ void scan_begin(std::string_view kind, std::string_view stage);
 void scan_stage(std::string_view kind, std::string_view stage);
 void scan_end(std::string_view kind, std::string_view stage);
 void scan_set_found(std::string_view kind, uint64_t found);
+void scan_set_total(std::string_view kind, uint64_t total);
 void scan_add_done(std::string_view kind, uint64_t amount);
 bool scan_cancelled(std::string_view kind);
 /* 扫描状态快照（JSON 对象 {"dup": ScanStatus, "big": ScanStatus}）。 */

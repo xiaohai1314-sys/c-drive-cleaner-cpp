@@ -1033,6 +1033,10 @@ int scan_dups(std::span<const char *const> roots, uint64_t min_size, const ScanO
     FileEntryList all;
     for (const std::string &root : use_roots) {
         if (is_cancelled(opts)) break;
+        if (opts.on_stage) {
+            std::string stage = "枚举 " + root;
+            opts.on_stage(stage.c_str());
+        }
         FileEntryList list;
         if (scan_files(root.c_str(), min, kTopSkip, nullptr, list) != 0) continue;
         for (FileEntry &e : list)
@@ -1059,6 +1063,9 @@ int scan_dups(std::span<const char *const> roots, uint64_t min_size, const ScanO
         std::fprintf(stderr, "dup: 参与比对 %zu 个文件, 枚举用时 %.1fs\n", candidates_count,
                      now_mono() - started);
     if (candidates_count == 0) return 0;
+    // 候选总数已定：先报总数、再切到比对阶段，GUI 才能显示“正在比对文件 n/m…”。
+    if (opts.on_total) opts.on_total(candidates_count);
+    if (opts.on_stage) opts.on_stage("比对文件");
     // 缓存预加载（只加载候选路径）。
     std::vector<const char *> paths;
     paths.reserve(candidates_count);

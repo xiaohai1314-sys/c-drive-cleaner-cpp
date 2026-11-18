@@ -946,6 +946,64 @@ static void test_scan_dups() {
     printf("scan_dups done\n");
 }
 
+/* ---------------- 6b. scan_dups 进度回调 ---------------- */
+/* 全盘扫描曾全程只显示“正在枚举文件…”：scan_dups 从不报阶段、总数也从不设。
+ * 回归：on_stage 在枚举换盘和进入比对时回调，on_total 报出候选总数。 */
+
+static char g_prog_stages[8][256];
+static int g_prog_stage_count = 0;
+static uint64_t g_prog_total = 0;
+static int g_prog_total_calls = 0;
+
+static void test_prog_on_stage(const char *stage) {
+    if (g_prog_stage_count < 8 && stage)
+        snprintf(g_prog_stages[g_prog_stage_count++], sizeof g_prog_stages[0], "%s", stage);
+}
+static void test_prog_on_total(uint64_t total) {
+    g_prog_total = total;
+    g_prog_total_calls++;
+}
+
+static void test_scan_dups_progress() {
+    printf("== scan_dups progress ==\n");
+    char dir_tmpl[] = "/tmp/cdc-test-dups-prog-XXXXXX";
+    if (!mkdtemp(dir_tmpl)) { perror("mkdtemp"); exit(2); }
+    char cache_tmpl[] = "/tmp/cdc-test-dups-prog-cache-XXXXXX";
+    if (!mkdtemp(cache_tmpl)) { perror("mkdtemp"); exit(2); }
+    setenv("LOCALAPPDATA", cache_tmpl, 1);
+
+    char p[PATH_MAX];
+    /* 一对同大小同内容 => 1 组、2 个候选；一个独苗大小 => 不进候选。 */
+    join_path(p, sizeof p, dir_tmpl, "p1.bin"); write_repeat(p, 4096, 'P');
+    join_path(p, sizeof p, dir_tmpl, "p2.bin"); write_repeat(p, 4096, 'P');
+    join_path(p, sizeof p, dir_tmpl, "u.bin"); write_repeat(p, 2048, 'U');
+
+    g_prog_stage_count = 0;
+    g_prog_total = 0;
+    g_prog_total_calls = 0;
+    const char *roots[] = { dir_tmpl };
+    cdc::ScanOpts opts;
+    opts.on_stage = test_prog_on_stage;
+    opts.on_total = test_prog_on_total;
+    cdc::DupGroupList g;
+    CHECK_INT(cdc::scan_dups(roots, 1, opts, g), 0, "scan_dups progress rc");
+    CHECK_U64(g.size(), 1, "scan_dups progress groups");
+    CHECK_INT(g_prog_total_calls, 1, "on_total called once");
+    CHECK_U64(g_prog_total, 2, "on_total candidates");
+    int saw_compare = 0, saw_enum = 0;
+    for (int i = 0; i < g_prog_stage_count; i++) {
+        if (strcmp(g_prog_stages[i], "比对文件") == 0) saw_compare = 1;
+        if (strncmp(g_prog_stages[i], "枚举 ", 7) == 0) saw_enum = 1;
+    }
+    CHECK(saw_compare, "on_stage saw 比对文件");
+    CHECK(saw_enum, "on_stage saw 枚举 <root>");
+
+    char cmd[PATH_MAX + 64];
+    snprintf(cmd, sizeof cmd, "rm -rf '%s' '%s'", dir_tmpl, cache_tmpl);
+    CHECK_INT(system(cmd), 0, "cleanup dups progress tmp");
+    printf("scan_dups progress done\n");
+}
+
 /* ---------------- 7. cdc::scan_hash_groups（切片 4 契约） ---------------- */
 
 static void test_hash_groups() {
@@ -1446,6 +1504,7 @@ int main(int argc, char **argv) {
     test_fastio();
     test_scan_big(fixtures);
     test_scan_dups();
+    test_scan_dups_progress();
     test_scan_dups_fixtures(fixtures);
     test_hash_groups();
     test_fallback_walk();

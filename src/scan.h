@@ -55,6 +55,11 @@ using DupGroupList = std::vector<DupGroup>;
 struct ScanOpts {
     const volatile int *cancel = nullptr;  // 可为空；调用方置 1 即取消
     FunctionRef<void()> on_tick;  // 每完成一个文件的一次摘要计算回调一次，可为空
+    // 进度上报（可为空）：on_stage 在枚举换盘 / 进入比对时回调；on_total 在
+    // 候选总数确定（同 size ≥2 的文件数）时回调一次。GUI 用它驱动
+    // “正在比对文件 123/456…”——没有它，全盘扫描全程只显示“正在枚举文件…”。
+    FunctionRef<void(const char *)> on_stage;
+    FunctionRef<void(uint64_t)> on_total;
     bool trace = false;  // 为真时打 Rust 版的 dup: / dup[label]: 行到 stderr
     bool fast = false;   // 为真时 strong 即终局（快速模式），否则 full 为终局
 };

@@ -725,6 +725,12 @@ void scan_set_found(std::string_view kind, uint64_t found) {
     GUI_UNLOCK();
 }
 
+void scan_set_total(std::string_view kind, uint64_t total) {
+    GUI_LOCK();
+    gui_scan_cell(kind)->total = total;
+    GUI_UNLOCK();
+}
+
 void scan_add_done(std::string_view kind, uint64_t amount) {
     GUI_LOCK();
     gui_scan_cell(kind)->done += amount;
@@ -1832,6 +1838,8 @@ std::string gui_dup_cache_path(std::string_view key) {
 }
 
 void gui_dup_tick() { scan_add_done("dup", 1); }
+void gui_dup_stage(const char *stage) { scan_stage("dup", stage); }
+void gui_dup_total(uint64_t total) { scan_set_total("dup", total); }
 
 int h_scan_dups(const char *args_json, char **out_json, char **out_error) {
     (void)out_error;
@@ -1919,6 +1927,8 @@ int h_scan_dups(const char *args_json, char **out_json, char **out_error) {
     ScanOpts opts;
     opts.cancel = &g_dup_cancel;
     opts.on_tick = gui_dup_tick;
+    opts.on_stage = gui_dup_stage;
+    opts.on_total = gui_dup_total;
     opts.trace = getenv("CDC_TRACE") != nullptr;
     opts.fast = fast;
     std::vector<const char *> root_ptrs;
