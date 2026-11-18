@@ -1680,7 +1680,7 @@ cJSON *gui_query_dups_from_index(std::span<const std::string> roots, uint64_t mi
         std::optional<std::string> prefix;
         if (!gui_parse_index_scope(root, &drive, &prefix)) return nullptr;
         uint64_t serial = 0;
-        if (!cdc_index_scope_fresh(idx, drive.c_str(), 1, &serial) || serial == 0)
+        if (!index_scope_fresh(idx, drive, true, &serial) || serial == 0)
             return nullptr;
         serials.push_back(serial);
         prefixes.push_back(std::move(prefix));
@@ -1796,7 +1796,7 @@ cJSON *gui_query_big_from_index(std::span<const std::string> drives) {
     std::vector<uint64_t> serials;
     for (const std::string &d : drives) {
         uint64_t serial = 0;
-        if (!cdc_index_scope_fresh(idx, d.c_str(), 0, &serial) || serial == 0)
+        if (!index_scope_fresh(idx, d, false, &serial) || serial == 0)
             return nullptr;
         serials.push_back(serial);
     }
@@ -2381,10 +2381,10 @@ int h_index_status(const char *args_json, char **out_json, char **out_error) {
         if (!v) continue;
         cJSON_AddStringToObject(v, "drive", drive.c_str());
         uint64_t files = 0, with_full = 0, updated_at = 0;
-        char state[16] = "missing";
+        std::string state = "missing";
         if (idx) {
             uint64_t serial = 0;
-            cdc_index_freshness(idx, drive.c_str(), &serial, state, sizeof(state));
+            index_freshness(idx, drive, &serial, &state);
             if (serial != 0) {
                 IndexCounts c = idx->volume_counts(serial);
                 files = c.total;
@@ -2392,7 +2392,7 @@ int h_index_status(const char *args_json, char **out_json, char **out_error) {
                 updated_at = idx->usn_state_updated_at(serial).value_or(0);
             }
         }
-        cJSON_AddStringToObject(v, "state", state);
+        cJSON_AddStringToObject(v, "state", state.c_str());
         cJSON_AddNumberToObject(v, "files", (double)files);
         cJSON_AddNumberToObject(v, "with_full", (double)with_full);
         cJSON_AddNumberToObject(v, "updated_at", (double)updated_at);
@@ -2413,8 +2413,8 @@ int h_index_sync_now(const char *args_json, char **out_json, char **out_error) {
     if (!gui_is_admin()) {
         return gui_ok_string(out_json, "--index 需要管理员权限。");
     }
-    char summary[2048];
-    cdc_run_index_summary(1, 0, summary, sizeof(summary));
+    std::string summary;
+    run_index_summary(true, false, &summary);
     return gui_ok_string(out_json, summary);
 }
 
@@ -2424,8 +2424,8 @@ int h_index_rebuild(const char *args_json, char **out_json, char **out_error) {
     if (!gui_is_admin()) {
         return gui_ok_string(out_json, "--index 需要管理员权限。");
     }
-    char summary[2048];
-    cdc_run_index_summary(1, 1, summary, sizeof(summary));
+    std::string summary;
+    run_index_summary(true, true, &summary);
     return gui_ok_string(out_json, summary);
 }
 

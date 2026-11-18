@@ -106,30 +106,29 @@ void gui_invalidate_dup_cache();
  * 注册进度/取消回调。Linux 下返回 0（空操作）。 */
 int gui_register_commands();
 
+/* ---- 以下三个函数在 main.cpp 里实现（CLI 的索引编排，GUI 复用）。 ---- */
+
+/* 只读新鲜度（Rust freshness_from_state；index_status 用，不触发同步）。
+ * state_out 填 fresh | behind | stale | missing | unavailable 之一；
+ * serial_out 填卷序列号（卷打不开时填 0）。返回 0。 */
+int index_freshness(FileIndex *idx, std::string_view drive, uint64_t *serial_out,
+                    std::string *state_out);
+
+/* 查询前确保一卷新鲜（Rust ensure_index_scope_fresh）：Fresh 直接用；
+ * Behind 跑一次增量（仅增量，不回填；do_hash 为真时补算摘要）。
+ * 返回 true=新鲜（serial_out 已填），false=不新鲜（serial_out 填卷序列号，
+ * 卷打不开时填 0）。 */
+bool index_scope_fresh(FileIndex *idx, std::string_view drive, bool do_hash,
+                       uint64_t *serial_out);
+
+/* --index 编排（增量优先，断档回填）：quiet 为真时不打印到 stdout。
+ * summary 总是填一条中文汇总（失败时为失败原因）。返回退出码
+ * （0 全部成功，1 部分卷失败，2 非管理员）。 */
+int run_index_summary(bool quiet, bool rebuild, std::string *summary);
+
 }  // namespace cdc
 
 /* GUI 入口的 C 名字（main.cpp 用；实现在 gui.cpp 里转发到
  * cdc::gui_register_commands）。 */
 int cdc_gui_register_commands(void);
-
-/* ---- 以下三个函数由 main.cpp 实现（CLI 的索引编排，GUI 复用）。
- * main 移植时会改名进 namespace cdc；在此之前保持 C 名字。 ---- */
-
-/* --index 编排（增量优先，断档回填）：quiet=1 时不打印到 stdout。
- * summary 总是填一条中文汇总（失败时为失败原因）。返回退出码
- * （0 全部成功，1 部分卷失败，2 非管理员）。 */
-int cdc_run_index_summary(int quiet, int rebuild, char *summary, size_t cap);
-
-/* 查询前确保一卷新鲜（Rust ensure_index_scope_fresh）：Fresh 直接用；
- * Behind 跑一次增量（仅增量，不回填；do_hash=1 时补算摘要）。
- * 返回 1=新鲜（serial_out 已填），0=不新鲜（serial_out 填卷序列号，
- * 卷打不开时填 0）。 */
-int cdc_index_scope_fresh(cdc::FileIndex *idx, const char *drive, int do_hash,
-                          uint64_t *serial_out);
-
-/* 只读新鲜度（Rust freshness_from_state；index_status 用，不触发同步）。
- * state_out 填 fresh | behind | stale | missing | unavailable 之一；
- * serial_out 填卷序列号（卷打不开时填 0）。返回 0。 */
-int cdc_index_freshness(cdc::FileIndex *idx, const char *drive, uint64_t *serial_out,
-                        char *state_out, size_t cap);
 

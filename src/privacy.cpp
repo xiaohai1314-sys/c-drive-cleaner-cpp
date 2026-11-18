@@ -79,16 +79,6 @@ constexpr const char *kUsbStorage = "SYSTEM\\CurrentControlSet\\Enum\\USBSTOR";
 
 // ---------------- 小工具 ----------------
 
-// 尚未迁移模块返回的 malloc 串：接管并释放。
-// 仅 Windows 的 backup_key 在用（Linux 下无调用点，留着会触发 -Werror）。
-#ifdef _WIN32
-std::string take(char *s) {
-    std::string out = s ? s : "";
-    std::free(s);
-    return out;
-}
-#endif
-
 std::string env_or_empty(const char *name) { return getenv_utf8(name).value_or(std::string()); }
 
 bool is_dir_utf8(const std::string &path) {
@@ -448,7 +438,7 @@ bool backup_key(const char *hive, const std::string &path, const char *label) {
         CreateDirectoryW(wd->c_str(), nullptr);
     }
     std::string file = dir + "\\" + label + "_" + stamp() + ".reg";
-    std::string reg_exe = take(cdc_system32_path("reg.exe"));
+    std::string reg_exe = system32_path("reg.exe");
     if (reg_exe.empty()) reg_exe = "reg.exe";
     std::string args = std::string("export \"") + hive + "\\" + path + "\" \"" + file + "\" /y";
     long code = -1;

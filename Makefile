@@ -64,7 +64,7 @@ endif
 
 # ---- 自家源码 ----
 # libcdc：除 main.cpp 外的全部后端；链接器只拉用到的对象。
-LIB_SRCS := util legacy_c timeutil mft_util bigfile mft_raw mft fastio sampling scan \
+LIB_SRCS := util timeutil mft_util bigfile mft_raw mft fastio sampling scan \
             fileindex hashcache safety recycle privacy system rules im shred \
             process indextask logs gui
 LIB_NATIVE_OBJS := $(LIB_SRCS:%=$(BN)/obj/%.o)

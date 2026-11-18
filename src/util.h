@@ -207,7 +207,3 @@ std::optional<std::string> cache_dir();
 int log_set_file(std::string_view filename);
 
 }  // namespace cdc
-
-// TRANSITIONAL：尚未迁移的模块仍用 C 版接口（cdc_buf_t / cdc_log 等），
-// 由 legacy_c.h 以 cdc:: 新接口实现。最后一个模块迁移完后删除。
-#include "legacy_c.h"

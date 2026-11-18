@@ -23,9 +23,6 @@
  * 未决事项（见 gui.cpp 头注释）：GUI 提权自启、计划任务后台重注册、
  * 启动时 recover_pending_move()——Rust main() 里有，C 版尚未决定。
  */
-#ifndef _WIN32
-#endif
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -43,15 +40,16 @@
 #include "bigfile.h"
 #include "mft_util.h"
 #include "fileindex.h"
-#include "hashcache.h" /* cdc_hashcache_*（真实现；桩已删） */
+#include "hashcache.h"
 #include "indextask.h"
-#include "mft.h" /* CdcFileEntry、cdc_scan_files、USN */
-#include "scan.h" /* cdc_scan_input_t、cdc_scan_hash_groups（真实现；桩已删） */
-#include "gui.h" /* cdc_gui_register_commands（GUI 入口） */
+#include "mft.h"
+#include "scan.h"
+#include "gui.h"
 #include "raii.h"
+#include "util.h"
 
 #ifdef _WIN32
-#include "bridge.h" /* cdc_host_prewarm / cdc_host_run（extern "C"）；Windows 构建加 -Ihost */
+#include "bridge.h" /* cdc_host_prewarm / cdc_host_run；Windows 构建加 -Ihost */
 #endif
 
 #ifdef _WIN32
@@ -61,9 +59,6 @@
 #include <dirent.h>
 #include <sys/stat.h>
 #include <unistd.h>
-#endif
-
-#ifdef _WIN32
 #endif
 
 /* ================= 自测（试点，保留） ================= */
@@ -171,7 +166,7 @@ static int run_selftest(void) {
     printf("selftest: %d checks, %d failures\n", checks, failures);
     int total_fail = failures;
     total_fail += cdc::fileindex_selftest();
-    total_fail += cdc_indextask_selftest();
+    total_fail += cdc::indextask_selftest();
     printf("selftest total: %d failures\n", total_fail);
     return total_fail == 0 ? 0 : 1;
 }
@@ -223,9 +218,6 @@ static int run_big(const char *dir) {
 
 /* ================= --index 编排 ================= */
 
-/* 顶层跳过目录用 mft.h 的 CDC_TOP_SKIP / CDC_TOP_SKIP_N
- *（与 Rust main.rs 的 TOP_SKIP 逐字一致）。CDC_TOP_SKIP 是
- * const char *const[]，接口参数是 const char *const *，无需 cast。 */
 static double now_mono(void) {
 #ifdef _WIN32
     return (double)GetTickCount64() / 1000.0;
@@ -244,56 +236,12 @@ static int is_admin(void) {
 #endif
 }
 
-/* 固定磁盘列表（如 "C:\"）。与 Rust main.rs 的 fixed_drives 一致：
- * GetLogicalDrives + DRIVE_FIXED；一个都没有时回落到 ["C:\"]。
- * 非 Windows 返回空列表（没有 NTFS 固定盘的概念）。
- * 返回固定磁盘路径的 C++ 字符串列表；非 Windows 返回空列表。 */
-static std::vector<std::string> fixed_drives() {
-#ifdef _WIN32
-    DWORD mask = GetLogicalDrives();
-    std::vector<std::string> drives;
-    for (int i = 0; i < 26; i++) {
-        if ((mask & (1u << i)) == 0) continue;
-        char root[4] = {(char)('A' + i), ':', '\\', '\0'};
-        wchar_t *w = cdc_utf8_to_wide(root);
-        if (!w) continue;
-        int fixed = GetDriveTypeW(w) == DRIVE_FIXED;
-        free(w);
-        if (!fixed) continue;
-        drives.emplace_back(root);
-    }
-    if (drives.empty()) {
-        /* 回落：与 Rust 一致，哪怕没有固定盘也试 C:。 */
-        drives.emplace_back("C:\\");
-    }
-    return drives;
-#else
-    return {};
-#endif
-}
-
-/* 文件的 mtime（unix 秒），取不到返回 0（对应 Rust file_mtime）。 */
-static uint64_t file_mtime(const char *path) {
-#ifdef _WIN32
-    wchar_t *w = cdc_utf8_to_wide(path);
-    if (!w) return 0;
-    struct _stat st;
-    int rc = _wstat(w, &st);
-    free(w);
-    return rc == 0 && st.st_mtime > 0 ? (uint64_t)st.st_mtime : 0;
-#else
-    struct stat st;
-    if (stat(path, &st) != 0) return 0;
-    return st.st_mtime > 0 ? (uint64_t)st.st_mtime : 0;
-#endif
-}
-
 /* 索引进度日志：logs/index-YYYYMMDD.log（本地日期）。写失败静默忽略。
- * 目录用 util.h 的 cdc_log_dir（与 Rust logs::log_dir() 同规则，
+ * 目录用 util.h 的 log_dir（与 Rust logs::log_dir() 同规则，
  * 且内部已创建目录）。 */
 static void index_log(const char *msg) {
-    char dir[4096];
-    if (cdc_log_dir(dir, sizeof(dir)) != CDC_OK) return;
+    auto dir = cdc::log_dir();
+    if (!dir) return;
     time_t now = time(NULL);
     struct tm *lt = localtime(&now);
     char datestr[16] = "19700101";
@@ -316,19 +264,13 @@ static void index_log(const char *msg) {
 #else
     const char *sep = "/";
 #endif
-    char path[4200];
-    if (snprintf(path, sizeof(path), "%s%sindex-%s.log", dir, sep, datestr) >=
-        (int)sizeof(path))
-        return;
+    std::string path = *dir + sep + "index-" + datestr + ".log";
     FILE *f = NULL;
 #ifdef _WIN32
-    wchar_t *w = cdc_utf8_to_wide(path);
-    if (w) {
-        f = _wfopen(w, L"a");
-        free(w);
-    }
+    auto w = cdc::utf8_to_wide(path);
+    if (w) f = _wfopen(w->c_str(), L"a");
 #else
-    f = fopen(path, "a");
+    f = fopen(path.c_str(), "a");
 #endif
     if (!f) return;
     fprintf(f, "%s\n", msg);
@@ -492,7 +434,7 @@ static IdxOutcome index_volume_backfill(cdc::FileIndex &idx, const char *drive, 
     std::vector<cdc::FileEntry> res;
     for (cdc::FileEntry &e : list) {
         if (e.frn == 0) continue;
-        if (e.mtime == 0) e.mtime = file_mtime(e.path.c_str());
+        if (e.mtime == 0) e.mtime = cdc::file_mtime(e.path.c_str());
         res.push_back(std::move(e));
     }
     size_t skipped = total_entries - res.size();
@@ -564,105 +506,115 @@ struct VolumeUsn {
     uint64_t serial = 0, journal_id = 0;
     int64_t first_usn = 0, next_usn = 0;
 };
-static std::optional<VolumeUsn> volume_usn(const char *drive) {
+static std::optional<VolumeUsn> volume_usn(std::string_view drive) {
     VolumeUsn v;
-    if (cdc::volume_usn_state(drive, v.serial, v.journal_id, v.first_usn, v.next_usn) != 0)
+    if (cdc::volume_usn_state(std::string(drive).c_str(), v.serial, v.journal_id, v.first_usn,
+                              v.next_usn) != 0)
         return std::nullopt;
     return v;
 }
 
 /* 已存游标可用时取变化集；不可用或取不到返回 false。 */
-static bool usable_changes(cdc::FileIndex &idx, const char *drive, const VolumeUsn &v,
+static bool usable_changes(cdc::FileIndex &idx, std::string_view drive, const VolumeUsn &v,
                            cdc::UsnChangeSet &changes) {
     std::optional<cdc::UsnState> stored = idx.get_usn_state(v.serial);
     if (!stored || !cdc::usn_state_usable(stored->journal_id, stored->next_usn, v.journal_id,
                                           v.first_usn, v.next_usn))
         return false;
-    return cdc::usn_changes_since(drive, stored->journal_id, stored->next_usn, cdc::kTopSkip,
-                                  changes) == 0;
+    return cdc::usn_changes_since(std::string(drive).c_str(), stored->journal_id,
+                                  stored->next_usn, cdc::kTopSkip, changes) == 0;
 }
 
 /* 单卷索引入口：游标可用时走 USN 增量追赶，否则全量回填。
  * rebuild 为真时先清掉该卷的索引行和游标，再全量回填。 */
-static IdxOutcome index_volume(cdc::FileIndex &idx, const char *drive, bool quiet, bool do_hash,
-                               bool rebuild) {
+static IdxOutcome index_volume(cdc::FileIndex &idx, std::string_view drive, bool quiet,
+                               bool do_hash, bool rebuild) {
     double started = now_mono();
     std::optional<VolumeUsn> v = volume_usn(drive);
     if (!v) {
-        std::string msg = cdc::format("--index：%s 打不开卷或 USN 日志。", drive);
+        std::string msg = cdc::format("--index：%s 打不开卷或 USN 日志。",
+                                      std::string(drive).c_str());
         std::fprintf(stderr, "%s\n", msg.c_str());
         index_log(msg.c_str());
         IdxOutcome fail;
         fail.elapsed_secs = now_mono() - started;
         return fail;
     }
+    std::string drive_s(drive);
     if (rebuild) {
         idx.delete_volume(v->serial);
     } else if (idx.get_usn_state(v->serial)) {
         cdc::UsnChangeSet changes;
         if (usable_changes(idx, drive, *v, changes))
-            return index_volume_incremental(idx, drive, v->serial, changes, quiet, do_hash,
-                                            started);
+            return index_volume_incremental(idx, drive_s.c_str(), v->serial, changes, quiet,
+                                            do_hash, started);
         std::optional<cdc::UsnState> st = idx.get_usn_state(v->serial);
         bool usable = st && cdc::usn_state_usable(st->journal_id, st->next_usn, v->journal_id,
                                                   v->first_usn, v->next_usn);
         /* 变化集取不到（无快照 / 变化太多 / 日志读失败）：回落全量回填。 */
-        if (usable && !quiet) std::printf("index: %s 增量不可用（变化集取不到），全量回填\n", drive);
+        if (usable && !quiet)
+            std::printf("index: %s 增量不可用（变化集取不到），全量回填\n", drive_s.c_str());
     }
-    return index_volume_backfill(idx, drive, v->serial, v->journal_id, v->next_usn, quiet);
+    return index_volume_backfill(idx, drive_s.c_str(), v->serial, v->journal_id, v->next_usn,
+                                 quiet);
 }
 
 /* 只做增量追赶，不回填（页面查询用：查询前确保新鲜，绝不触发全量回填）。
  * 返回 true=追赶成功，false=增量不可用。 */
-static bool index_volume_incremental_only(cdc::FileIndex &idx, const char *drive, bool quiet,
-                                          bool do_hash) {
+static bool index_volume_incremental_only(cdc::FileIndex &idx, std::string_view drive,
+                                          bool quiet, bool do_hash) {
     std::optional<VolumeUsn> v = volume_usn(drive);
     if (!v) return false;
     cdc::UsnChangeSet changes;
     if (!usable_changes(idx, drive, *v, changes)) return false;
-    return index_volume_incremental(idx, drive, v->serial, changes, quiet, do_hash, now_mono())
+    return index_volume_incremental(idx, std::string(drive).c_str(), v->serial, changes,
+                                    quiet, do_hash, now_mono())
                .status == IdxStatus::Incremented;
 }
+
+namespace cdc {
 
 /* 只读新鲜度（Rust freshness_from_state；index_status 用，不触发同步）。
  * state_out 填 fresh | behind | stale | missing | unavailable 之一；
  * serial_out 填卷序列号（卷打不开时填 0）。返回 0。 */
-int cdc_index_freshness(cdc::FileIndex *idx, const char *drive, uint64_t *serial_out,
-                        char *state_out, size_t cap) {
-    const char *state = "unavailable";
+int index_freshness(FileIndex *idx, std::string_view drive, uint64_t *serial_out,
+                    std::string *state_out) {
+    std::string state = "unavailable";
     if (serial_out) *serial_out = 0;
     if (std::optional<VolumeUsn> v = volume_usn(drive)) {
         if (serial_out) *serial_out = v->serial;
-        std::optional<cdc::UsnState> stored = idx->get_usn_state(v->serial);
+        std::optional<UsnState> stored = idx->get_usn_state(v->serial);
         if (!stored)
             state = "missing";
-        else if (!cdc::usn_state_usable(stored->journal_id, stored->next_usn, v->journal_id,
-                                        v->first_usn, v->next_usn))
+        else if (!usn_state_usable(stored->journal_id, stored->next_usn, v->journal_id,
+                                   v->first_usn, v->next_usn))
             state = "stale";
         else
             state = stored->next_usn == v->next_usn ? "fresh" : "behind";
     }
-    if (state_out && cap) std::snprintf(state_out, cap, "%s", state);
+    if (state_out) *state_out = state;
     return 0;
 }
 
 /* 查询前确保一卷新鲜（Rust ensure_index_scope_fresh）：Fresh 直接用；
- * Behind 跑一次增量（仅增量，不回填；do_hash=1 时补算摘要）。
- * 返回 1=新鲜（serial_out 已填），0=不新鲜（serial_out 填卷序列号，
+ * Behind 跑一次增量（仅增量，不回填；do_hash 为真时补算摘要）。
+ * 返回 true=新鲜（serial_out 已填），false=不新鲜（serial_out 填卷序列号，
  * 卷打不开时填 0）。 */
-int cdc_index_scope_fresh(cdc::FileIndex *idx, const char *drive, int do_hash,
-                          uint64_t *serial_out) {
-    char state[16] = "";
+bool index_scope_fresh(FileIndex *idx, std::string_view drive, bool do_hash,
+                       uint64_t *serial_out) {
+    std::string state;
     uint64_t serial = 0;
-    cdc_index_freshness(idx, drive, &serial, state, sizeof(state));
-    if (std::strcmp(state, "behind") == 0) {
+    index_freshness(idx, drive, &serial, &state);
+    if (state == "behind") {
         /* 追赶一次增量，再判一次新鲜度。 */
-        if (index_volume_incremental_only(*idx, drive, true, do_hash != 0))
-            cdc_index_freshness(idx, drive, &serial, state, sizeof(state));
+        if (index_volume_incremental_only(*idx, drive, true, do_hash))
+            index_freshness(idx, drive, &serial, &state);
     }
     if (serial_out) *serial_out = serial;
-    return std::strcmp(state, "fresh") == 0 ? 1 : 0;
+    return state == "fresh";
 }
+
+}  // namespace cdc
 
 /* 逐卷索引并返回汇总行。返回 0=全部成功，1=有卷失败。 */
 static int index_all_drives(cdc::FileIndex &idx, const std::vector<std::string> &drives, bool quiet,
@@ -672,7 +624,7 @@ static int index_all_drives(cdc::FileIndex &idx, const std::vector<std::string> 
     double total_elapsed = 0;
     std::string failed_list;
     for (const std::string &drive : drives) {
-        IdxOutcome o = index_volume(idx, drive.c_str(), quiet, true, rebuild);
+        IdxOutcome o = index_volume(idx, drive, quiet, true, rebuild);
         total_files += o.files;
         total_hashed += o.hashed_new;
         total_reused += o.reused_full;
@@ -698,13 +650,16 @@ static int index_all_drives(cdc::FileIndex &idx, const std::vector<std::string> 
     return failed_list.empty() ? 0 : 1;
 }
 
+namespace cdc {
+
 /* --index 编排（增量优先，断档回填；CLI 与 GUI 共用）：
- * quiet=1 时不打印到 stdout；summary 总是填一条中文汇总（失败时为
+ * quiet 为真时不打印到 stdout；summary 总是填一条中文汇总（失败时为
  * 失败原因）；进度同时打到 logs/index-YYYYMMDD.log。
  * 退出码：0 全部成功，1 部分卷失败，2 非管理员。 */
-int cdc_run_index_summary(int quiet, int rebuild, char *summary, size_t cap) {
+int run_index_summary(bool quiet, bool rebuild, std::string *summary) {
+    if (summary) summary->clear();
     auto put = [&](const std::string &s) {
-        if (summary && cap) std::snprintf(summary, cap, "%s", s.c_str());
+        if (summary) *summary = s;
     };
     if (!is_admin()) {
         put("--index 需要管理员权限。");
@@ -715,31 +670,33 @@ int cdc_run_index_summary(int quiet, int rebuild, char *summary, size_t cap) {
         put("--index：没有找到固定磁盘。");
         return 1;
     }
-    cdc::Error err;
-    std::unique_ptr<cdc::FileIndex> idx = cdc::FileIndex::open_default(&err);
+    Error err;
+    std::unique_ptr<FileIndex> idx = FileIndex::open_default(&err);
     if (!idx) {
         put("--index：打不开索引库。");
         return 1;
     }
     std::string text;
-    int rc = index_all_drives(*idx, drives, quiet != 0, rebuild != 0, text);
+    int rc = index_all_drives(*idx, drives, quiet, rebuild, text);
     put(text);
     index_log(text.c_str());
     return rc;
 }
 
+}  // namespace cdc
+
 /* --index 的 CLI 包装：退出码与原来一致（0 全部成功，1 部分卷失败，
  * 2 非管理员），失败原因打 stderr，成功汇总在非 quiet 时打 stdout。 */
 static int run_index(int quiet, int rebuild) {
-    char summary[2048] = "";
-    int rc = cdc_run_index_summary(quiet, rebuild, summary, sizeof(summary));
+    std::string summary;
+    int rc = cdc::run_index_summary(quiet != 0, rebuild != 0, &summary);
     if (rc == 2) {
         fprintf(stderr,
                 "--index 需要管理员权限：请用管理员身份运行（计划任务请用最高权限）。\n");
     } else if (rc != 0) {
-        fprintf(stderr, "%s\n", summary);
+        fprintf(stderr, "%s\n", summary.c_str());
     } else if (!quiet) {
-        printf("%s\n", summary);
+        printf("%s\n", summary.c_str());
     }
     return rc;
 }
