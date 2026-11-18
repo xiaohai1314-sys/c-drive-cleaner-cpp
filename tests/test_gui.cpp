@@ -14,6 +14,10 @@
 #include <string.h>
 #include <unistd.h>
 
+#include <optional>
+#include <string>
+#include <vector>
+
 #include "cJSON.h"
 #include "gui.h"
 #include "util.h"
@@ -36,9 +40,8 @@ static int failures = 0;
           (want), (got))
 
 static cJSON *status_obj(const char *task_id) {
-    char *json = cdc_task_status_json();
-    cJSON *root = cJSON_Parse(json);
-    free(json);
+    std::string json = cdc::task_status_json();
+    cJSON *root = cJSON_Parse(json.c_str());
     if (!root) return NULL;
     cJSON *obj = cJSON_GetObjectItemCaseSensitive(root, task_id);
     if (obj) cJSON_DetachItemFromObjectCaseSensitive(root, task_id);
@@ -47,9 +50,8 @@ static cJSON *status_obj(const char *task_id) {
 }
 
 static cJSON *scan_obj(const char *kind) {
-    char *json = cdc_scan_status_json();
-    cJSON *root = cJSON_Parse(json);
-    free(json);
+    std::string json = cdc::scan_status_json();
+    cJSON *root = cJSON_Parse(json.c_str());
     if (!root) return NULL;
     cJSON *obj = cJSON_GetObjectItemCaseSensitive(root, kind);
     if (obj) cJSON_DetachItemFromObjectCaseSensitive(root, kind);
@@ -66,7 +68,7 @@ static void test_frag(void) {
         "    碎片率 = 12%\n"
         "    碎片空间 = 0.42 GB\n"
         "    碎片文件数 = 1,234\n";
-    cdc_frag_parsed_t p = cdc_frag_parse_defrag(zh);
+    cdc::FragParsed p = cdc::frag_parse_defrag(zh);
     CHECK(p.has_percent && p.percent == 12.0, "zh percent");
     CHECK(p.has_space_gb && p.space_gb == 0.42, "zh space_gb");
     CHECK(p.has_count && p.count == 1234, "zh count");
@@ -80,14 +82,14 @@ static void test_frag(void) {
         "    Percent file fragmentation = 7%\n"
         "    Total fragmented space = 0.10 GB\n"
         "    Total fragmented files = 42\n";
-    p = cdc_frag_parse_defrag(en);
+    p = cdc::frag_parse_defrag(en);
     CHECK(p.has_percent && p.percent == 7.0, "en percent");
     CHECK(p.has_space_gb && p.space_gb == 0.10, "en space_gb");
     CHECK(p.has_count && p.count == 42, "en count");
     CHECK(p.has_free_gb && p.free_gb == 30.5, "en free_gb");
 
     /* Rust frag.rs 测试向量 3：无可用数据 → 全部 None。 */
-    p = cdc_frag_parse_defrag("没有可用的分析数据\n");
+    p = cdc::frag_parse_defrag("没有可用的分析数据\n");
     CHECK(!p.has_percent && !p.has_space_gb && !p.has_count && !p.has_free_gb,
           "missing fields all none");
 
@@ -95,21 +97,19 @@ static void test_frag(void) {
     const char *full =
         "碎片率\xe3\x80\x80= 9%\n"
         "碎片空间\xe3\x80\x80= 0.01 GB\n";
-    p = cdc_frag_parse_defrag(full);
+    p = cdc::frag_parse_defrag(full);
     CHECK(p.has_percent && p.percent == 9.0, "U+3000 percent");
     CHECK(p.has_space_gb && p.space_gb == 0.01, "U+3000 space_gb");
 
     /* 空输入 → 全部 None，不崩。 */
-    p = cdc_frag_parse_defrag("");
+    p = cdc::frag_parse_defrag("");
     CHECK(!p.has_percent && !p.has_space_gb && !p.has_count && !p.has_free_gb,
           "empty input all none");
 }
 
 static void test_task_dock(void) {
-    char *err = NULL;
-    CHECK(cdc_task_begin("t1", "测试任务", 1, 0, &err) == 0, "begin t1");
-    free(err);
-    err = NULL;
+    std::string err;
+    CHECK(cdc::task_begin("t1", "测试任务", true, false, &err) == 0, "begin t1");
 
     cJSON *o = status_obj("t1");
     CHECK(o != NULL, "status has t1");
@@ -128,8 +128,8 @@ static void test_task_dock(void) {
         cJSON_Delete(o);
     }
 
-    cdc_task_set_stage("t1", "阶段A");
-    cdc_task_set_progress("t1", 3, 10);
+    cdc::task_set_stage("t1", "阶段A");
+    cdc::task_set_progress("t1", 3, 10);
     o = status_obj("t1");
     CHECK(o != NULL, "status t1 again");
     if (o) {
@@ -144,16 +144,16 @@ static void test_task_dock(void) {
         cJSON_Delete(o);
     }
 
-    CHECK(cdc_task_cancel("t1") == 1, "cancel t1 returns 1");
+    CHECK(cdc::task_cancel(std::string_view("t1")), "cancel t1 returns 1");
     o = status_obj("t1");
     if (o) {
         CHECK(cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(o, "cancelling")),
               "t1 cancelling after cancel");
         cJSON_Delete(o);
     }
-    CHECK(cdc_task_cancelled("t1") == 1, "t1 cancelled flag");
+    CHECK(cdc::task_cancelled("t1"), "t1 cancelled flag");
 
-    cdc_task_finish("t1", "ok", "完成");
+    cdc::task_finish("t1", "ok", "完成");
     o = status_obj("t1");
     if (o) {
         CHECK(cJSON_IsFalse(cJSON_GetObjectItemCaseSensitive(o, "active")),
@@ -172,26 +172,18 @@ static void test_task_dock(void) {
     }
 
     /* mutating 互斥：已有活跃 mutating 任务时第二个 begin 失败。 */
-    CHECK(cdc_task_begin("m1", "清理", 0, 1, &err) == 0, "begin m1 mutating");
-    free(err);
-    err = NULL;
-    CHECK(cdc_task_begin("m2", "清理2", 0, 1, &err) == -1,
+    CHECK(cdc::task_begin("m1", "清理", false, true, &err) == 0, "begin m1 mutating");
+    CHECK(cdc::task_begin("m2", "清理2", false, true, &err) == -1,
           "begin m2 conflicts");
-    CHECK(err && strcmp(err, "已有清理任务正在进行，请等它结束后再试") == 0,
+    CHECK(err == "已有清理任务正在进行，请等它结束后再试",
           "conflict message");
-    free(err);
-    err = NULL;
-    cdc_task_finish("m1", "ok", "m1 done");
-    CHECK(cdc_task_begin("m2", "清理2", 0, 1, &err) == 0,
+    cdc::task_finish("m1", "ok", "m1 done");
+    CHECK(cdc::task_begin("m2", "清理2", false, true, &err) == 0,
           "begin m2 after m1 finished");
-    free(err);
-    err = NULL;
-    cdc_task_finish("m2", "ok", "m2 done");
+    cdc::task_finish("m2", "ok", "m2 done");
 
     /* 同 id 重复 begin 覆盖旧条目（Rust map.insert 一致）。 */
-    CHECK(cdc_task_begin("t1", "新标题", 0, 0, &err) == 0, "begin t1 again");
-    free(err);
-    err = NULL;
+    CHECK(cdc::task_begin("t1", "新标题", false, false, &err) == 0, "begin t1 again");
     o = status_obj("t1");
     if (o) {
         cJSON *title = cJSON_GetObjectItemCaseSensitive(o, "title");
@@ -202,118 +194,101 @@ static void test_task_dock(void) {
               "t1 active again");
         cJSON_Delete(o);
     }
-    cdc_task_finish("t1", "ok", "done");
+    cdc::task_finish("t1", "ok", "done");
 
     /* cancel_all：NULL 取消全部可取消的活跃任务。 */
-    CHECK(cdc_task_begin("c1", "可取消1", 1, 0, &err) == 0, "begin c1");
-    free(err);
-    err = NULL;
-    CHECK(cdc_task_begin("c2", "可取消2", 1, 0, &err) == 0, "begin c2");
-    free(err);
-    err = NULL;
-    CHECK(cdc_task_begin("c3", "不可取消", 0, 0, &err) == 0, "begin c3");
-    free(err);
-    err = NULL;
-    CHECK(cdc_task_cancel(NULL) == 1, "cancel_all returns 1");
-    CHECK(cdc_task_cancelled("c1") == 1, "c1 cancelled by cancel_all");
-    CHECK(cdc_task_cancelled("c2") == 1, "c2 cancelled by cancel_all");
-    CHECK(cdc_task_cancelled("c3") == 0, "c3 not cancelled by cancel_all");
-    cdc_task_finish("c1", "cancelled", "已取消");
-    cdc_task_finish("c2", "cancelled", "已取消");
-    cdc_task_finish("c3", "ok", "done");
+    CHECK(cdc::task_begin("c1", "可取消1", true, false, &err) == 0, "begin c1");
+    CHECK(cdc::task_begin("c2", "可取消2", true, false, &err) == 0, "begin c2");
+    CHECK(cdc::task_begin("c3", "不可取消", false, false, &err) == 0, "begin c3");
+    CHECK(cdc::task_cancel(std::nullopt), "cancel_all returns 1");
+    CHECK(cdc::task_cancelled("c1"), "c1 cancelled by cancel_all");
+    CHECK(cdc::task_cancelled("c2"), "c2 cancelled by cancel_all");
+    CHECK(!cdc::task_cancelled("c3"), "c3 not cancelled by cancel_all");
+    cdc::task_finish("c1", "cancelled", "已取消");
+    cdc::task_finish("c2", "cancelled", "已取消");
+    cdc::task_finish("c3", "ok", "done");
 }
 
 static void test_dup_cache_key(void) {
-    const char *roots1[] = {"C:\\"};
-    const char *roots2[] = {"C:\\", "D:\\"};
-    char *k1 = cdc_gui_dup_cache_key(roots1, 1, 1048576, 0);
-    char *k2 = cdc_gui_dup_cache_key(roots1, 1, 1048576, 0);
-    CHECK(k1 && k2 && strcmp(k1, k2) == 0, "cache key deterministic");
+    std::vector<std::string> roots1 = {"C:\\"};
+    std::vector<std::string> roots2 = {"C:\\", "D:\\"};
+    std::string k1 = cdc::gui_dup_cache_key(roots1, 1048576, false);
+    std::string k2 = cdc::gui_dup_cache_key(roots1, 1048576, false);
+    CHECK(k1 == k2, "cache key deterministic");
     /* 完整 32 字节 blake3 摘要的 hex（64 字符），与 Rust 的
      * dups-{blake3}.json 文件名一致。 */
-    CHECK(k1 && strlen(k1) == 64, "cache key is 64 hex chars");
-    if (k1) {
+    CHECK(k1.size() == 64, "cache key is 64 hex chars");
+    {
         int hex = 1;
-        for (size_t i = 0; i < strlen(k1); i++) {
-            char c = k1[i];
+        for (char c : k1) {
             if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) hex = 0;
         }
         CHECK(hex, "cache key lowercase hex");
     }
-    char *k3 = cdc_gui_dup_cache_key(roots1, 1, 1048576, 1);
-    CHECK(k1 && k3 && strcmp(k1, k3) != 0, "cache key differs by fast");
-    char *k4 = cdc_gui_dup_cache_key(roots1, 1, 2097152, 0);
-    CHECK(k1 && k4 && strcmp(k1, k4) != 0, "cache key differs by min_size");
-    char *k5 = cdc_gui_dup_cache_key(roots2, 2, 1048576, 0);
-    CHECK(k1 && k5 && strcmp(k1, k5) != 0, "cache key differs by roots");
-    free(k1);
-    free(k2);
-    free(k3);
-    free(k4);
-    free(k5);
+    std::string k3 = cdc::gui_dup_cache_key(roots1, 1048576, true);
+    CHECK(k1 != k3, "cache key differs by fast");
+    std::string k4 = cdc::gui_dup_cache_key(roots1, 2097152, false);
+    CHECK(k1 != k4, "cache key differs by min_size");
+    std::string k5 = cdc::gui_dup_cache_key(roots2, 1048576, false);
+    CHECK(k1 != k5, "cache key differs by roots");
 }
 
 static void test_index_scope(void) {
-    char drive[8] = "";
-    char *prefix = NULL;
-    CHECK(cdc_gui_parse_index_scope("C:\\", drive, &prefix) == 1,
+    std::string drive;
+    std::optional<std::string> prefix;
+    CHECK(cdc::gui_parse_index_scope("C:\\", &drive, &prefix),
           "scope C:\\ ok");
-    CHECK_STR_EQ(drive, "C:\\");
-    CHECK(prefix == NULL, "scope C:\\ prefix NULL");
-    free(prefix);
-    prefix = NULL;
+    CHECK_STR_EQ(drive.c_str(), "C:\\");
+    CHECK(!prefix.has_value(), "scope C:\\ prefix none");
+    prefix.reset();
 
-    CHECK(cdc_gui_parse_index_scope("C:\\Foo\\", drive, &prefix) == 1,
+    CHECK(cdc::gui_parse_index_scope("C:\\Foo\\", &drive, &prefix),
           "scope C:\\Foo\\ ok");
-    CHECK_STR_EQ(drive, "C:\\");
-    CHECK(prefix && strcmp(prefix, "C:\\Foo") == 0, "scope prefix trimmed");
-    free(prefix);
-    prefix = NULL;
+    CHECK_STR_EQ(drive.c_str(), "C:\\");
+    CHECK(prefix && *prefix == "C:\\Foo", "scope prefix trimmed");
+    prefix.reset();
 
-    CHECK(cdc_gui_parse_index_scope("c:\\foo", drive, &prefix) == 1,
+    CHECK(cdc::gui_parse_index_scope("c:\\foo", &drive, &prefix),
           "scope lowercase drive ok");
-    CHECK_STR_EQ(drive, "C:\\");
-    CHECK(prefix && strcmp(prefix, "c:\\foo") == 0, "scope prefix keeps case");
-    free(prefix);
-    prefix = NULL;
+    CHECK_STR_EQ(drive.c_str(), "C:\\");
+    CHECK(prefix && *prefix == "c:\\foo", "scope prefix keeps case");
+    prefix.reset();
 
-    CHECK(cdc_gui_parse_index_scope("D:\\Docs", drive, &prefix) == 1,
+    CHECK(cdc::gui_parse_index_scope("D:\\Docs", &drive, &prefix),
           "scope D:\\Docs ok");
-    CHECK_STR_EQ(drive, "D:\\");
-    free(prefix);
-    prefix = NULL;
+    CHECK_STR_EQ(drive.c_str(), "D:\\");
+    prefix.reset();
 
     /* "C:" 也接受（与 Rust parse_index_scope_root 一致：len==2 即通过，
-     * drive "C:\\"，prefix 为 None）。 */
-    CHECK(cdc_gui_parse_index_scope("C:", drive, &prefix) == 1,
+     * drive "C:\\" - prefix 为 None）。 */
+    CHECK(cdc::gui_parse_index_scope("C:", &drive, &prefix),
           "scope C: accepted like Rust");
-    CHECK_STR_EQ(drive, "C:\\");
-    CHECK(prefix == NULL, "scope C: prefix NULL");
-    free(prefix);
-    prefix = NULL;
-    CHECK(cdc_gui_parse_index_scope("", drive, &prefix) == 0,
+    CHECK_STR_EQ(drive.c_str(), "C:\\");
+    CHECK(!prefix.has_value(), "scope C: prefix none");
+    prefix.reset();
+    CHECK(!cdc::gui_parse_index_scope("", &drive, &prefix),
           "scope empty rejected");
-    CHECK(cdc_gui_parse_index_scope("C", drive, &prefix) == 0,
+    CHECK(!cdc::gui_parse_index_scope("C", &drive, &prefix),
           "scope C rejected");
 
-    CHECK(cdc_gui_path_under_dir("C:\\Foo\\bar.txt", "C:\\Foo") == 1,
+    CHECK(cdc::gui_path_under_dir("C:\\Foo\\bar.txt", "C:\\Foo"),
           "path under dir");
-    CHECK(cdc_gui_path_under_dir("C:\\Foo\\sub\\deep.txt", "C:\\Foo") == 1,
+    CHECK(cdc::gui_path_under_dir("C:\\Foo\\sub\\deep.txt", "C:\\Foo"),
           "path under dir deep");
-    CHECK(cdc_gui_path_under_dir("C:\\Foo", "C:\\Foo") == 0,
+    CHECK(!cdc::gui_path_under_dir("C:\\Foo", "C:\\Foo"),
           "dir itself not under");
-    CHECK(cdc_gui_path_under_dir("C:\\FooBar\\x", "C:\\Foo") == 0,
+    CHECK(!cdc::gui_path_under_dir("C:\\FooBar\\x", "C:\\Foo"),
           "sibling prefix not under");
-    CHECK(cdc_gui_path_under_dir("c:\\foo\\x", "C:\\Foo") == 1,
+    CHECK(cdc::gui_path_under_dir("c:\\foo\\x", "C:\\Foo"),
           "path under dir case-insensitive");
-    CHECK(cdc_gui_path_under_dir("D:\\Foo\\x", "C:\\Foo") == 0,
+    CHECK(!cdc::gui_path_under_dir("D:\\Foo\\x", "C:\\Foo"),
           "other drive not under");
 }
 
 static void test_scan_cells(void) {
-    cdc_scan_begin("dup", "枚举");
-    cdc_scan_set_found("dup", 5);
-    cdc_scan_add_done("dup", 3);
+    cdc::scan_begin("dup", "枚举");
+    cdc::scan_set_found("dup", 5);
+    cdc::scan_add_done("dup", 3);
     cJSON *o = scan_obj("dup");
     CHECK(o != NULL, "scan status has dup");
     if (o) {
@@ -331,8 +306,8 @@ static void test_scan_cells(void) {
               "dup not cancelled");
         cJSON_Delete(o);
     }
-    CHECK(cdc_scan_cancelled("dup") == 0, "dup scan not cancelled");
-    cdc_scan_end("dup", "完成");
+    CHECK(!cdc::scan_cancelled("dup"), "dup scan not cancelled");
+    cdc::scan_end("dup", "完成");
     o = scan_obj("dup");
     if (o) {
         CHECK(cJSON_IsFalse(cJSON_GetObjectItemCaseSensitive(o, "active")),
@@ -343,9 +318,9 @@ static void test_scan_cells(void) {
               "dup end stage");
         cJSON_Delete(o);
     }
-    cdc_scan_begin("big", "扫描");
-    CHECK(cdc_scan_cancelled("big") == 0, "big scan not cancelled");
-    cdc_scan_end("big", "完成");
+    cdc::scan_begin("big", "扫描");
+    CHECK(!cdc::scan_cancelled("big"), "big scan not cancelled");
+    cdc::scan_end("big", "完成");
 }
 
 static void test_setenv_localappdata(const char *value) {
@@ -361,19 +336,19 @@ static void test_setenv_localappdata(const char *value) {
 }
 
 static void test_invalidate_dup_cache(void) {
-    /* 把缓存目录指到临时目录：cdc_cache_dir 在 Linux 下认 LOCALAPPDATA。 */
+    /* 把缓存目录指到临时目录：cache_dir 在 Linux 下认 LOCALAPPDATA。 */
     char tmpl[] = "/tmp/cdc-gui-test-XXXXXX";
     char *tmp = mkdtemp(tmpl);
     CHECK(tmp != NULL, "mkdtemp");
     if (!tmp) return;
     test_setenv_localappdata(tmp);
 
-    char *dir = cdc_cache_dir();
-    CHECK(dir != NULL, "cache dir created");
+    auto dir = cdc::cache_dir();
+    CHECK(dir.has_value(), "cache dir created");
     if (!dir) return;
     char dups_path[4096], keep_path[4096];
-    snprintf(dups_path, sizeof(dups_path), "%s/dups-abc123.json", dir);
-    snprintf(keep_path, sizeof(keep_path), "%s/keep.txt", dir);
+    snprintf(dups_path, sizeof(dups_path), "%s/dups-abc123.json", dir->c_str());
+    snprintf(keep_path, sizeof(keep_path), "%s/keep.txt", dir->c_str());
     FILE *f = fopen(dups_path, "w");
     CHECK(f != NULL, "write dups file");
     if (f) {
@@ -386,10 +361,9 @@ static void test_invalidate_dup_cache(void) {
         fputs("keep", f);
         fclose(f);
     }
-    cdc_gui_invalidate_dup_cache();
+    cdc::gui_invalidate_dup_cache();
     CHECK(access(dups_path, F_OK) != 0, "dups file deleted");
     CHECK(access(keep_path, F_OK) == 0, "other file kept");
-    free(dir);
 
     /* 清理临时目录。 */
     remove(dups_path);

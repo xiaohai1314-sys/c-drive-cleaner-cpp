@@ -1288,3 +1288,4 @@ int cdc_valid_recovery_paths(const char *source, const char *backup,
         roots.emplace_back(allowed_roots[i] ? allowed_roots[i] : "");
     return cdc::valid_recovery_paths(source, backup, roots) ? 1 : 0;
 }
+

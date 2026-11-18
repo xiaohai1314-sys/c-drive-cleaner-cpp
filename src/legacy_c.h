@@ -393,3 +393,4 @@ int cdc_execute_im_migration(const char *source, const char *target_dir,
 int cdc_safe_for_quoted_cmd_path(const char *path);
 int cdc_valid_recovery_paths(const char *source, const char *backup,
                              const char **allowed_roots, size_t nroots);
+
