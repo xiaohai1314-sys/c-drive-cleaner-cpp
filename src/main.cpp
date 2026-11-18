@@ -17,11 +17,13 @@
  *
  * 卷/USN/枚举接口用 mft.h；hashcache.cpp / scan.cpp
  * 的接口见 hashcache.h / scan.h。
- * GUI 入口在 main() 默认分支（无 CLI 参数时）：先 cdc_host_prewarm()，
- * 再 cdc_gui_register_commands() 注册 45 个后端命令，最后
- * cdc_host_run() 跑消息循环（见 src/gui.cpp + host/host.cpp）。
- * 未决事项（见 gui.cpp 头注释）：GUI 提权自启、计划任务后台重注册、
- * 启动时 recover_pending_move()——Rust main() 里有，C 版尚未决定。
+ * GUI 入口在 main() 默认分支（无 CLI 参数时）：非管理员时以 runas 自启提权
+ *（UAC 取消则继续非提权跑 GUI）；提权后后台线程幂等重注册每日 03:00 的
+ * 索引计划任务（失败只记索引日志）；再同步 recover_pending_move()，还原
+ * 上次中断的搬家；最后 cdc_host_prewarm()，cdc_gui_register_commands()
+ * 注册 45 个后端命令，cdc_host_run() 跑消息循环（见 src/gui.cpp +
+ * host/host.cpp）。三项均与 Rust main() 一致。--index / --selftest 分支
+ * 在提权之前，不弹 UAC。
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -30,11 +32,13 @@
 #include <time.h>
 
 #include <algorithm>
+#include <array>
 #include <cstring>
 #include <memory>
 #include <optional>
 #include <span>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "bigfile.h"
@@ -44,6 +48,7 @@
 #include "indextask.h"
 #include "mft.h"
 #include "scan.h"
+#include "system.h"
 #include "gui.h"
 #include "raii.h"
 #include "util.h"
@@ -54,6 +59,7 @@
 
 #ifdef _WIN32
 #include <windows.h>
+#include <shellapi.h> /* ShellExecuteW */
 #include <shlobj.h> /* IsUserAnAdmin */
 #else
 #include <dirent.h>
@@ -235,6 +241,20 @@ static int is_admin(void) {
     return geteuid() == 0;
 #endif
 }
+
+#ifdef _WIN32
+/* 与 Rust ensure_admin() 一致：读 $MFT 需要管理员权限，非管理员时以 runas
+ * 重新启动自己；提权成功返回 true，调用方直接退出原进程。用户在 UAC 点取消
+ *（返回值 <= 32）或取不到 exe 路径时返回 false，调用方继续以非管理员跑 GUI。 */
+static bool relaunch_as_admin() {
+    if (IsUserAnAdmin() != 0) return false;
+    std::array<wchar_t, 32768> exe{};
+    DWORD n = ::GetModuleFileNameW(nullptr, exe.data(), static_cast<DWORD>(exe.size()));
+    if (n == 0 || n >= exe.size()) return false;
+    HINSTANCE r = ::ShellExecuteW(nullptr, L"runas", exe.data(), nullptr, nullptr, SW_SHOWNORMAL);
+    return reinterpret_cast<intptr_t>(r) > 32;
+}
+#endif
 
 /* 索引进度日志：logs/index-YYYYMMDD.log（本地日期）。写失败静默忽略。
  * 目录用 util.h 的 log_dir（与 Rust logs::log_dir() 同规则，
@@ -742,6 +762,23 @@ int main(int argc, char **argv) {
         /* 先脱离控制台，避免启动时闪一下黑窗口；
          * CLI 分支（--index / --selftest / big / probe）不受影响。 */
         FreeConsole();
+        if (relaunch_as_admin()) return 0;
+        /* 已提权的前提下，后台幂等重注册每日 03:00 的索引计划任务（/f 覆盖）。
+         * 不阻塞启动：注册失败只记索引日志。UAC 取消时继续非提权跑 GUI，
+         * 后台注册会失败并只记日志，与 Rust 的行为一致。 */
+        std::thread([] {
+            std::string msg;
+            cdc::Error err;
+            if (cdc::register_task(&msg, &err) == 0) {
+                index_log(("计划任务：" + msg).c_str());
+            } else {
+                index_log(("计划任务注册失败：" + (msg.empty() ? std::string(err.message) : msg))
+                              .c_str());
+            }
+        }).detach();
+        /* 上次搬家如果停在“改名”和“建联接”之间，先把数据目录还原回去
+         *（与 Rust main() 一致；无日志时静默返回）。 */
+        cdc::recover_pending_move();
         (void)cdc_host_prewarm();
         if (cdc_gui_register_commands() != 0) {
             fprintf(stderr, "注册后端命令失败。\n");
