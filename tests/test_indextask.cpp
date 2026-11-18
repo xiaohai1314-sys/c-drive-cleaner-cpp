@@ -1,4 +1,4 @@
-// test_indextask.cpp — cross-platform tests for the C ABI facade.
+// test_indextask.cpp — cross-platform tests for the indextask module.
 #include "check.h"
 #include "indextask.h"
 
@@ -14,63 +14,51 @@
 
 namespace {
 
-struct Free {
-    void operator()(char *p) const { std::free(p); }
-};
+using namespace cdc;
 
 void test_escape_and_xml() {
-    char *escaped = cdc_indextask_xml_escape("C:\\a&b<c>d\"e");
-    CHECK(escaped && std::strcmp(escaped, "C:\\a&amp;b&lt;c&gt;d&quot;e") == 0, "XML escape");
-    std::free(escaped);
+    CHECK(xml_escape("C:\\a&b<c>d\"e") == "C:\\a&amp;b&lt;c&gt;d&quot;e", "XML escape");
 
-    char *xml = cdc_indextask_build_task_xml("C:\\Program Files\\C盘清理工具\\app&x.exe\"",
-                                             "DOMAIN\\u<ser&\"", "2026-11-18T03:00:00&bad");
-    CHECK(xml != nullptr, "XML generated");
-    if (!xml)
-        return;
-    std::string text(xml);
-    CHECK(text.find("<Task version=\"1.3\"") != std::string::npos, "Task version");
-    CHECK(text.find("<LogonType>S4U</LogonType>") != std::string::npos, "S4U");
-    CHECK(text.find("<RunLevel>HighestAvailable</RunLevel>") != std::string::npos,
+    std::string xml = build_task_xml("C:\\Program Files\\C盘清理工具\\app&x.exe\"",
+                                     "DOMAIN\\u<ser&\"", "2026-11-18T03:00:00&bad");
+    CHECK(!xml.empty(), "XML generated");
+    CHECK(xml.find("<Task version=\"1.3\"") != std::string::npos, "Task version");
+    CHECK(xml.find("<LogonType>S4U</LogonType>") != std::string::npos, "S4U");
+    CHECK(xml.find("<RunLevel>HighestAvailable</RunLevel>") != std::string::npos,
           "highest run level");
-    CHECK(text.find("C:\\Program Files\\C盘清理工具\\app&amp;x.exe&quot;") != std::string::npos,
+    CHECK(xml.find("C:\\Program Files\\C盘清理工具\\app&amp;x.exe&quot;") != std::string::npos,
           "command escaped");
-    CHECK(text.find("DOMAIN\\u&lt;ser&amp;&quot;") != std::string::npos, "user escaped");
-    CHECK(text.find("2026-11-18T03:00:00&amp;bad") != std::string::npos, "boundary escaped");
-    CHECK(text.find("<Arguments>--index --quiet</Arguments>") != std::string::npos,
+    CHECK(xml.find("DOMAIN\\u&lt;ser&amp;&quot;") != std::string::npos, "user escaped");
+    CHECK(xml.find("2026-11-18T03:00:00&amp;bad") != std::string::npos, "boundary escaped");
+    CHECK(xml.find("<Arguments>--index --quiet</Arguments>") != std::string::npos,
           "fixed arguments");
-    std::free(xml);
 }
 
 void test_dates() {
-    int y = 0, m = 0, d = 0;
-    cdc_indextask_next_0300_date(2026, 11, 17, 2, &y, &m, &d);
-    CHECK(y == 2026 && m == 11 && d == 17, "before 03:00 uses today");
-    cdc_indextask_next_0300_date(2026, 11, 17, 3, &y, &m, &d);
-    CHECK(y == 2026 && m == 11 && d == 18, "at 03:00 uses tomorrow");
-    cdc_indextask_next_0300_date(2028, 2, 28, 23, &y, &m, &d);
-    CHECK(y == 2028 && m == 2 && d == 29, "leap day");
-    cdc_indextask_next_0300_date(2100, 2, 28, 23, &y, &m, &d);
-    CHECK(y == 2100 && m == 3 && d == 1, "non-leap century");
-    cdc_indextask_next_0300_date(2026, 12, 31, 23, &y, &m, &d);
-    CHECK(y == 2027 && m == 1 && d == 1, "year rollover");
-    CHECK(cdc_indextask_days_in_month(2000, 2) == 29 && cdc_indextask_days_in_month(1900, 2) == 28,
+    Ymd d = next_0300_date(2026, 11, 17, 2);
+    CHECK(d.year == 2026 && d.month == 11 && d.day == 17, "before 03:00 uses today");
+    d = next_0300_date(2026, 11, 17, 3);
+    CHECK(d.year == 2026 && d.month == 11 && d.day == 18, "at 03:00 uses tomorrow");
+    d = next_0300_date(2028, 2, 28, 23);
+    CHECK(d.year == 2028 && d.month == 2 && d.day == 29, "leap day");
+    d = next_0300_date(2100, 2, 28, 23);
+    CHECK(d.year == 2100 && d.month == 3 && d.day == 1, "non-leap century");
+    d = next_0300_date(2026, 12, 31, 23);
+    CHECK(d.year == 2027 && d.month == 1 && d.day == 1, "year rollover");
+    CHECK(days_in_month(2000, 2) == 29 && days_in_month(1900, 2) == 28,
           "Gregorian leap rule");
 }
 
 void test_utf16_roundtrip() {
-    char *xml =
-        cdc_indextask_build_task_xml("C:\\盘\\app.exe", "S-1-5-21-1001", "2026-11-18T03:00:00");
-    CHECK(xml != nullptr, "roundtrip XML generated");
-    if (!xml)
-        return;
+    std::string xml = build_task_xml("C:\\盘\\app.exe", "S-1-5-21-1001", "2026-11-18T03:00:00");
+    CHECK(!xml.empty(), "roundtrip XML generated");
 #ifdef _WIN32
     const std::string path = "cdc-indextask-test.xml";
 #else
     const std::string path = std::string("/tmp/cdc-indextask-test-") +
                              std::to_string(static_cast<long>(::getpid())) + ".xml";
 #endif
-    CHECK(cdc_indextask_write_task_xml_utf16(path.c_str(), xml) == 0, "UTF-16 write");
+    CHECK(write_task_xml_utf16(path, xml) == 0, "UTF-16 write");
     std::FILE *f = std::fopen(path.c_str(), "rb");
     CHECK(f != nullptr, "UTF-16 readback");
     if (f) {
@@ -82,36 +70,32 @@ void test_utf16_roundtrip() {
         std::fclose(f);
         CHECK(got == static_cast<size_t>(n) && n >= 2 && bytes[0] == 0xff && bytes[1] == 0xfe,
               "UTF-16LE BOM");
-        char *decoded = cdc_indextask_decode_task_xml(bytes.data(), got);
-        CHECK(decoded && std::strcmp(decoded, xml) == 0, "UTF-16 roundtrip");
-        std::free(decoded);
+        std::string decoded =
+            decode_task_xml(std::span<const unsigned char>(bytes.data(), got));
+        CHECK(decoded == xml, "UTF-16 roundtrip");
     }
     std::remove(path.c_str());
-    std::free(xml);
 }
 
 void test_non_windows_contract() {
 #ifndef _WIN32
-    int exists = 1, enabled = 1;
-    CHECK(cdc_indextask_task_status(&exists, &enabled) == 0 && exists == 0 && enabled == 0,
-          "non-Windows status fallback");
-    char msg[128] = {};
-    cdc_err_t err{};
-    CHECK(cdc_indextask_register(msg, sizeof(msg), &err) == -1 &&
-              std::strstr(msg, "Windows") != nullptr,
+    TaskStatus s = task_status();
+    CHECK(!s.exists && !s.enabled, "non-Windows status fallback");
+    std::string msg;
+    Error err{};
+    CHECK(register_task(&msg, &err) == -1 && msg.find("Windows") != std::string::npos,
           "non-Windows register fallback");
 #endif
 }
 
 void test_windows_current_user_sid() {
 #ifdef _WIN32
-    char *sid = cdc_indextask_current_user_sid();
-    CHECK(sid && std::strncmp(sid, "S-", 2) == 0, "current user SID string");
-    std::free(sid);
+    auto sid = current_user_sid();
+    CHECK(sid && sid->rfind("S-", 0) == 0, "current user SID string");
 #endif
 }
 
-} // namespace
+}  // namespace
 
 int main() {
     test_escape_and_xml();

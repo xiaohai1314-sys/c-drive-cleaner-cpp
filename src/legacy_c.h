@@ -197,3 +197,26 @@ int cdc_kill_process_by_name(const char *target_name, size_t *out_killed,
 int cdc_run_command(const char *exe, const char *args, int capture,
                     char **out_stdout, char **out_stderr, long *exit_code,
                     cdc_err_t *err);
+
+// ---- indextask ----
+#define CDC_INDEX_TASK_NAME "\\CDriveCleaner\\Index"
+#define CDC_INDEX_TASK_XML_FILE "cdrivecleaner-index-task.xml"
+
+char *cdc_indextask_xml_escape(const char *s);
+int cdc_indextask_days_in_month(int year, int month);
+void cdc_indextask_next_0300_date(int year, int month, int day, int hour,
+                                  int *out_year, int *out_month, int *out_day);
+char *cdc_indextask_next_start_boundary(void);
+char *cdc_indextask_build_task_xml(const char *exe_path, const char *user_id,
+                                   const char *start_boundary);
+int cdc_indextask_write_task_xml_utf16(const char *path, const char *xml_utf8);
+char *cdc_indextask_decode_task_xml(const unsigned char *bytes, size_t len);
+char *cdc_indextask_current_user_sid(void);
+char *cdc_indextask_current_user_name(void);
+char *cdc_indextask_task_user_id(void);
+int cdc_indextask_register(char *msg, size_t cap, cdc_err_t *err);
+int cdc_indextask_task_status(int *exists, int *enabled);
+int cdc_indextask_run_task(char *msg, size_t cap, cdc_err_t *err);
+int cdc_indextask_set_task_enabled(int enabled, char *msg, size_t cap, cdc_err_t *err);
+int cdc_indextask_delete_task(char *msg, size_t cap, cdc_err_t *err);
+int cdc_indextask_selftest(void);

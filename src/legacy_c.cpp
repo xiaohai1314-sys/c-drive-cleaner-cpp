@@ -12,6 +12,7 @@
 #include "logs.h"
 #include "shred.h"
 #include "cdc_process.h"
+#include "indextask.h"
 
 void cdc_err_init(cdc_err_t *err) { cdc::err_init(err); }
 void cdc_err_set(cdc_err_t *err, int code, const char *fmt, ...) {
@@ -636,3 +637,82 @@ int cdc_run_command(const char *exe, const char *args, int capture,
     }
     return rc;
 }
+
+// ---- indextask 转发 ----
+char *cdc_indextask_xml_escape(const char *s) { return dup_c(cdc::xml_escape(s ? s : "")); }
+int cdc_indextask_days_in_month(int year, int month) { return cdc::days_in_month(year, month); }
+void cdc_indextask_next_0300_date(int year, int month, int day, int hour, int *oy, int *om,
+                                  int *od) {
+    cdc::Ymd d = cdc::next_0300_date(year, month, day, hour);
+    if (oy)
+        *oy = d.year;
+    if (om)
+        *om = d.month;
+    if (od)
+        *od = d.day;
+}
+char *cdc_indextask_next_start_boundary() { return dup_c(cdc::next_start_boundary()); }
+char *cdc_indextask_build_task_xml(const char *exe_path, const char *user_id,
+                                   const char *start_boundary) {
+    return dup_c(cdc::build_task_xml(exe_path ? exe_path : "", user_id ? user_id : "",
+                                     start_boundary ? start_boundary : ""));
+}
+int cdc_indextask_write_task_xml_utf16(const char *path, const char *xml_utf8) {
+    if (!path || !xml_utf8)
+        return -1;
+    return cdc::write_task_xml_utf16(path, xml_utf8);
+}
+char *cdc_indextask_decode_task_xml(const unsigned char *bytes, size_t len) {
+    if (!bytes)
+        return dup_c("");
+    return dup_c(cdc::decode_task_xml(std::span<const unsigned char>(bytes, len)));
+}
+char *cdc_indextask_current_user_sid() {
+    auto s = cdc::current_user_sid();
+    return s ? dup_c(*s) : NULL;
+}
+char *cdc_indextask_current_user_name() {
+    auto s = cdc::current_user_name();
+    return s ? dup_c(*s) : NULL;
+}
+char *cdc_indextask_task_user_id() {
+    auto s = cdc::task_user_id();
+    return s ? dup_c(*s) : NULL;
+}
+int cdc_indextask_register(char *msg, size_t cap, cdc_err_t *err) {
+    std::string m;
+    int rc = cdc::register_task(&m, err);
+    if (msg && cap)
+        std::snprintf(msg, cap, "%s", m.c_str());
+    return rc;
+}
+int cdc_indextask_task_status(int *exists, int *enabled) {
+    cdc::TaskStatus s = cdc::task_status();
+    if (exists)
+        *exists = s.exists ? 1 : 0;
+    if (enabled)
+        *enabled = s.enabled ? 1 : 0;
+    return 0;
+}
+int cdc_indextask_run_task(char *msg, size_t cap, cdc_err_t *err) {
+    std::string m;
+    int rc = cdc::run_task(&m, err);
+    if (msg && cap)
+        std::snprintf(msg, cap, "%s", m.c_str());
+    return rc;
+}
+int cdc_indextask_set_task_enabled(int enabled, char *msg, size_t cap, cdc_err_t *err) {
+    std::string m;
+    int rc = cdc::set_task_enabled(enabled != 0, &m, err);
+    if (msg && cap)
+        std::snprintf(msg, cap, "%s", m.c_str());
+    return rc;
+}
+int cdc_indextask_delete_task(char *msg, size_t cap, cdc_err_t *err) {
+    std::string m;
+    int rc = cdc::delete_task(&m, err);
+    if (msg && cap)
+        std::snprintf(msg, cap, "%s", m.c_str());
+    return rc;
+}
+int cdc_indextask_selftest() { return cdc::indextask_selftest(); }
