@@ -88,8 +88,11 @@ export async function syncIndexNow(rebuild: boolean): Promise<boolean> {
   }
   indexSyncing.value = true;
   try {
+    // 首次重建可能跑几分钟，不设超时（后端跑完才回；5 分钟默认会误报超时）。
     const summary = await invoke<string>(
       rebuild ? "index_rebuild" : "index_sync_now",
+      undefined,
+      { timeoutMs: 0 },
     );
     toast(summary);
   } catch (error) {

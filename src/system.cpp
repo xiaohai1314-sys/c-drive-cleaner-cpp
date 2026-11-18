@@ -1,6 +1,6 @@
 /* system.c — 移植自 Rust 版 desktop/src/system.rs + main.rs 的
  * system32 / fixed_drives / get_drive_free_space。
- * 句柄删除/固定全部走 safety.c 的句柄 API；Linux 下 Windows 专属
+ * 句柄删除/固定全部走 safety.cpp 的句柄 API；Linux 下 Windows 专属
  * 功能返回 CDC_ERR_IO。 */
 #include "system.h"
 

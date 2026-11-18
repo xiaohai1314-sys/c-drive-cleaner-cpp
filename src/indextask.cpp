@@ -163,9 +163,6 @@ struct LocalCloser {
 };
 using UniqueLocal = std::unique_ptr<wchar_t, LocalCloser>;
 
-std::optional<std::wstring> to_wide(std::string_view s) {
-    return cdc::utf8_to_wide(std::string(s));
-}
 std::optional<std::string> to_utf8(const wchar_t *s) { return cdc::wide_to_utf8(s); }
 
 std::wstring quote_arg(std::wstring_view arg) {
@@ -298,12 +295,15 @@ int schtasks_call(std::wstring_view args, const char *action, const char *ok_msg
 }
 #endif
 
+#ifndef _WIN32
+// 仅非 Windows 的桩实现用；Windows 下调用点都不编译，留着会触发 -Werror（unused-function）。
 void unsupported(char *msg, size_t cap, cdc_err_t *err) {
     constexpr const char *text = "计划任务仅 Windows 支持";
     if (msg && cap)
         std::snprintf(msg, cap, "%s", text);
     cdc_err_set(err, CDC_ERR_IO, "%s", text);
 }
+#endif
 
 } // namespace
 

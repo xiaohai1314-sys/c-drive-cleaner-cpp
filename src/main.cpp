@@ -1,4 +1,4 @@
-/* main.c — cdc-c 正式入口
+/* main.cpp — cdc-cpp 正式入口
  *
  *   cdc selftest | --selftest  移植单元测试（试点 + fileindex + indextask）
  *   cdc --index [--quiet] [--rebuild]
@@ -15,12 +15,12 @@
  *   进哈希管线 → 摘要双写（hashcache + index）→ 进度打到
  *   logs/index-YYYYMMDD.log。退出码：0 全卷 OK、1 部分失败、2 未提权。
  *
- * 卷/USN/枚举接口用 mft.h（切片 2 已落地）；hashcache.c / scan.c
- * （切片 3）的接口见 hashcache.h / scan.h（真实现已落地，临时桩已删）。
+ * 卷/USN/枚举接口用 mft.h；hashcache.cpp / scan.cpp
+ * 的接口见 hashcache.h / scan.h。
  * GUI 入口在 main() 默认分支（无 CLI 参数时）：先 cdc_host_prewarm()，
  * 再 cdc_gui_register_commands() 注册 45 个后端命令，最后
- * cdc_host_run() 跑消息循环（见 src/gui.c + host/host.cpp）。
- * 未决事项（见 gui.c 头注释）：GUI 提权自启、计划任务后台重注册、
+ * cdc_host_run() 跑消息循环（见 src/gui.cpp + host/host.cpp）。
+ * 未决事项（见 gui.cpp 头注释）：GUI 提权自启、计划任务后台重注册、
  * 启动时 recover_pending_move()——Rust main() 里有，C 版尚未决定。
  */
 #ifndef _WIN32
@@ -299,7 +299,7 @@ static void index_log(const char *msg) {
     char datestr[16] = "19700101";
     if (lt) {
         /* 显式收紧区间，让 -Wformat-truncation 能证明不截断
-         *（值本身已是合法日期；与 indextask.c 的同款处理一致）。 */
+         *（值本身已是合法日期；与 indextask.cpp 的同款处理一致）。 */
         int y = lt->tm_year + 1900;
         int mo = lt->tm_mon + 1;
         int d = lt->tm_mday;
@@ -782,6 +782,9 @@ int main(int argc, char **argv) {
          * 预热先行：浏览器进程拉起与后端初始化重叠；失败不致命，
          * cdc_host_run() 里还会再试一次。 */
 #ifdef _WIN32
+        /* 先脱离控制台，避免启动时闪一下黑窗口；
+         * CLI 分支（--index / --selftest / big / probe）不受影响。 */
+        FreeConsole();
         (void)cdc_host_prewarm();
         if (cdc_gui_register_commands() != 0) {
             fprintf(stderr, "注册后端命令失败。\n");

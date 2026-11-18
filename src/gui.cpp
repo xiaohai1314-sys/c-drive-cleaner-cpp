@@ -1,4 +1,4 @@
-/* gui.c — GUI 入口与 45 个后端命令的适配层。
+/* gui.cpp — GUI 入口与 45 个后端命令的适配层。
  *
  * 对照 Rust desktop/src/main.rs 的 invoke_handler（45 个命令，
  * 命令表见 docs/bridge-commands.md；前端发什么见 web/src/api/bridge.ts）。
@@ -9,10 +9,10 @@
  * 与 Rust 版有意的差别（其余语义逐行对齐，见各函数注释）：
  *  - 任务坞（task.rs）与扫描状态（scan_begin/end）由本文件实现；
  *    互斥规则与 30 秒保留期与 Rust 一致。
- *  - 安全删除没有 Pending（需重启删除）结果：C 的 safety.c 只有
+ *  - 安全删除没有 Pending（需重启删除）结果：C 的 safety.cpp 只有
  *    Deleted / Skipped / Failed 三态，clean_categories 的 pending 恒为 0。
  *  - scan_dups/scan_big 的索引优先 + 5 分钟 JSON 缓存在这里实现
- *    （scan.c 只做实时扫描）；索引增量追赶复用 main.c 的编排。
+ *    （scan.cpp 只做实时扫描）；索引增量追赶复用 main.cpp 的编排。
  *  - 前端发来的参数名有两个与 Rust 签名不一致（前端 bug，
  *    Rust 版会静默忽略/报错）：scan_dups 的 minSize（Rust 要 min_size）、
  *    im_move_execute 的 targetDir（Rust 要 target_dir）。这里两个名字都认，
@@ -21,7 +21,7 @@
  *    （见 docs/frontend-bridge.md），与本文件无关。
  *
  * Windows-only 的部分全部包在 #ifdef _WIN32 里；Linux 下本文件只编
- * 纯函数（frag 解析、缓存键、任务坞等，见 tests/test_gui.c）。
+ * 纯函数（frag 解析、缓存键、任务坞等，见 tests/test_gui.cpp）。
  */
 #include "gui.h"
 

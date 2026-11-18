@@ -70,7 +70,8 @@ async function scan() {
   await refreshIndexStatus();
   await refreshIndexTask();
   try {
-    bigRows.value = await invoke<BigFile[]>("scan_big");
+    // 大文件扫描可能跑几分钟，不设超时（后端跑完才回；5 分钟默认会误报超时）。
+    bigRows.value = await invoke<BigFile[]>("scan_big", undefined, { timeoutMs: 0 });
   } catch (error) {
     bigRows.value = [];
     toast("扫描失败：" + error);

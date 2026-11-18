@@ -137,12 +137,13 @@ async function scan() {
     }
     const multiDrive = dupScope.value === "ALL" || dupScope.value === "PICK";
     const minSize = multiDrive ? 4 * 1024 * 1024 : null;
+    // 全盘重复扫描可能跑几分钟，不设超时（后端跑完才回；5 分钟默认会误报超时）。
     dupGroups.value = await invoke<DupGroup[]>("scan_dups", {
       root,
       drives: pickedDrives,
       minSize,
       fast: dupFast.value,
-    });
+    }, { timeoutMs: 0 });
     dupChecked.clear();
     for (const group of dupGroups.value) {
       const keeper = pickKeeper(group);

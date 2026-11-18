@@ -8,7 +8,7 @@
  * 保留用于对照测试）→ 抛错（浏览器预览）。
  */
 
-import { hasBridge, invoke as bridgeInvoke } from "./bridge";
+import { hasBridge, invoke as bridgeInvoke, type BridgeInvokeOptions } from "./bridge";
 
 interface TauriCore {
   invoke?: (cmd: string, args?: Record<string, unknown>) => Promise<unknown>;
@@ -39,8 +39,13 @@ export function hasBackend(): boolean {
   return hasBridge() || hasTauri();
 }
 
-export async function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
-  if (hasBridge()) return bridgeInvoke<T>(cmd, args);
+export async function invoke<T>(
+  cmd: string,
+  args?: Record<string, unknown>,
+  opts?: BridgeInvokeOptions,
+): Promise<T> {
+  // 长命令的 timeoutMs 只对桥模式生效（Tauri invoke 本身不超时）。
+  if (hasBridge()) return bridgeInvoke<T>(cmd, args, opts);
   const fn = globalTauri()?.core?.invoke;
   if (!fn) throw new Error("当前不在 Tauri 或 WebView2 环境中");
   return (await fn(cmd, args)) as T;

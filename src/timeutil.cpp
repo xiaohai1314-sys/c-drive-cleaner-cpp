@@ -1,4 +1,4 @@
-/* timeutil.c — 移植自 Rust 版 desktop/src/timeutil.rs。 */
+/* timeutil.cpp — 移植自 Rust 版 desktop/src/timeutil.rs。 */
 #include "timeutil.h"
 
 #include <stdlib.h>

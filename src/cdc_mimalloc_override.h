@@ -12,7 +12,7 @@
  *
  * 另外：-include 在翻译单元自己的 #define 之前生效，而 features.h
  * 只在首次包含时读取特性宏——若 wrapper 不先定义 _GNU_SOURCE，
- * main.c / util.c 等在文件顶部才 #define _DEFAULT_SOURCE 的翻译单元
+ * main.cpp / util.cpp 等在文件顶部才 #define _DEFAULT_SOURCE 的翻译单元
  * 会在 wrapper 里就把 features.h 锁死为严格 ANSI，导致 lstat /
  * O_CLOEXEC 等声明丢失（实测）。所以 wrapper 先定义 _GNU_SOURCE
  *（超集，含 _DEFAULT_SOURCE / _POSIX_C_SOURCE 的声明；与各文件顶部

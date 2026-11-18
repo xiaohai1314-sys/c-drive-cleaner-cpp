@@ -2,14 +2,14 @@
  * 的 invoke_handler，命令表见 docs/bridge-commands.md）。
  *
  * 分层：
- *  - 纯函数（两平台可测，见 tests/test_gui.c）：frag 解析、dup 缓存键、
+ *  - 纯函数（两平台可测，见 tests/test_gui.cpp）：frag 解析、dup 缓存键、
  *    索引作用域解析、任务坞、扫描状态。
  *  - GUI 入口：cdc_gui_register_commands()（Windows 下注册全部 45 个命令，
  *    并向 shred/privacy/system/im 注册进度回调；Linux 下空操作）、
- *    main.c 提供的索引编排入口（cdc_run_index_summary /
+ *    main.cpp 提供的索引编排入口（cdc_run_index_summary /
  *    cdc_index_scope_fresh / cdc_index_freshness）。
- *  - 45 个适配函数只在 Windows 下编译（#ifdef _WIN32，见 gui.c），
- *    Linux 默认分支由 main.c 直接打印 "GUI 仅支持 Windows" 并退出，
+ *  - 45 个适配函数只在 Windows 下编译（#ifdef _WIN32，见 gui.cpp），
+ *    Linux 默认分支由 main.cpp 直接打印 "GUI 仅支持 Windows" 并退出，
  *    不链接 host/。
  */
 #ifndef CDC_GUI_H
@@ -40,7 +40,7 @@ typedef struct {
 } cdc_frag_parsed_t;
 
 /* 解析 defrag.exe /A /V 的输出（中/英文标签；先做 U+3000 折叠）。
- * 与 Rust frag.rs 的 parse_defrag 逐行一致，见 tests/test_gui.c。 */
+ * 与 Rust frag.rs 的 parse_defrag 逐行一致，见 tests/test_gui.cpp。 */
 cdc_frag_parsed_t cdc_frag_parse_defrag(const char *text);
 
 /* ---------------- 纯函数：dup 缓存键 / 索引作用域 ---------------- */
@@ -104,7 +104,7 @@ void cdc_gui_invalidate_dup_cache(void);
  * 注册进度/取消回调。Linux 下返回 0（空操作）。 */
 int cdc_gui_register_commands(void);
 
-/* ---- 以下三个函数由 main.c 实现（CLI 的索引编排，GUI 复用） ---- */
+/* ---- 以下三个函数由 main.cpp 实现（CLI 的索引编排，GUI 复用） ---- */
 
 /* --index 编排（增量优先，断档回填）：quiet=1 时不打印到 stdout。
  * summary 总是填一条中文汇总（失败时为失败原因）。返回退出码
