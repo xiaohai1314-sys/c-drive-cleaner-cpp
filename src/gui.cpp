@@ -9,8 +9,10 @@
 // 与 Rust 版有意的差别（其余语义逐行对齐，见各函数注释）：
 //  - 任务坞（task.rs）与扫描状态（scan_begin/end）由本文件实现；
 //    互斥规则与 30 秒保留期与 Rust 一致。
-//  - 安全删除没有 Pending（需重启删除）结果：C 的 safety.cpp 只有
-//    Deleted / Skipped / Failed 三态，clean_categories 的 pending 恒为 0。
+//  - 安全删除的 Pending（需重启删除）与 Rust 对齐：DeleteOutcome 有
+//    Pending 一档，clean_categories 按 Rust 的办法计 pending + skipped；
+//    但句柄相对的删除实现不做基于路径的重启删除，目前没有调用方返回
+//    Pending（与 Rust 的 dead_code 状态一致）。
 //  - scan_dups/scan_big 的索引优先 + 5 分钟 JSON 缓存在这里实现
 //    （scan.cpp 只做实时扫描）；索引增量追赶复用 main.cpp 的编排。
 //  - 前端发来的参数名有两个与 Rust 签名不一致（前端 bug，
@@ -1325,6 +1327,10 @@ void gui_clean_one(std::string_view path, CleanCtx *c) {
         report->deleted += 1;
         report->freed += size;
     } else if (rc == DeleteOutcome::Skipped) {
+        report->skipped += 1;
+    } else if (rc == DeleteOutcome::Pending) {
+        /* 与 Rust clean_one 一致：待重启的也算跳过。 */
+        report->pending += 1;
         report->skipped += 1;
     } else {
         report->skipped += 1;

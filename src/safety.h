@@ -163,7 +163,11 @@ bool explicit_delete_forbidden(PathArg path);
 
 // ---------------- 句柄删除（Windows；Linux 下返回 kErrIo） ----------------
 
-enum class DeleteOutcome { Deleted = 0, Skipped = 1, Failed = 2 };
+/* 与 Rust safety::DeleteOutcome 对齐：Pending 表示“已安排在重启后删除”。
+ * 句柄相对的删除实现不做基于路径的重启删除（MoveFileEx 是路径式，会绕过
+ * 父链校验），目前没有调用方返回 Pending；保留该值只为与 Rust 的报告结构
+ * 一致，前端的“待重启”计数有地方可读。 */
+enum class DeleteOutcome { Deleted = 0, Skipped = 1, Pending = 2, Failed = 3 };
 
 // 在已打开的句柄上设置删除标记（句柄关闭时生效）。粉碎功能复用。
 bool mark_delete(RawHandle file);
