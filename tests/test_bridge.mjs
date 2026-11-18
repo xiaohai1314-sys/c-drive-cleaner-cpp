@@ -11,6 +11,10 @@
 //   4. 超时：宿主不回包 → 按 timeoutMs reject；超时后才到的迟到回复被丢弃。
 //   5. 事件推送：{event, data} → onEvent 回调收到；取消订阅后不再收到。
 //   6. 非 bridge 环境：没有 chrome.webview 时 invoke 抛错。
+//   7. 回归 v0.1.0：post 的必须是对象。mock 按真实 WebView2 的
+//      WebMessageAsJson 语义（JSON.stringify( posted 值 )）喂给宿主；
+//      前端若包 JSON.stringify 发字符串，宿主拿到带引号的字面量，
+//      信封解析失败且无回包 —— 真机上全部调用永远挂起。
 //
 // 运行：node tests/test_bridge.mjs（需先在 web/ 里跑过 npm ci）。
 // 退出码 0 = 全部通过。
@@ -55,10 +59,21 @@ fs.renameSync(path.join(tmpDir, "bridge.js"), bundle);
 
 // --- mock window.chrome.webview（扮演 C 宿主）------------------------------
 const sent = []; // 宿主收到的 postMessage（已解析）
+const posted = []; // 前端 post 的原始值（回归项 7：必须是对象，不能是字符串）
 let hostReply = null; // 测试设置的回复策略：(msg) => void
 const host = {
-  postMessage(text) {
-    const msg = JSON.parse(text);
+  postMessage(value) {
+    posted.push(value);
+    // 模拟真实 WebView2：宿主读到的 WebMessageAsJson =
+    // JSON.stringify( posted 值 )。前端若发字符串，宿主拿到的是带引号的
+    // JSON 字符串字面量，信封解析（要求以 '{' 开头）失败且无回包 ——
+    // v0.1.0 在真机上就是这么坏的；旧 mock 用 JSON.parse(text) 直接
+    // 还原了字符串，把 bug 藏住了。
+    const asJson = JSON.stringify(value);
+    if (!asJson.startsWith("{")) {
+      throw new Error("宿主收到的不是对象 JSON：前端必须直接 post 对象");
+    }
+    const msg = JSON.parse(asJson);
     sent.push(msg);
     if (hostReply) hostReply(msg);
   },
@@ -90,6 +105,10 @@ hostReply = (msg) => reply(msg.id, { volumes: [] });
   assert.equal(typeof sent[0].id, "number");
   assert.equal(sent[0].cmd, "index_status");
   assert.deepEqual(sent[0].args, {});
+  // 回归 v0.1.0：post 的必须是对象。发字符串时 WebMessageAsJson 会再包
+  // 一层引号，宿主解析不到信封，所有调用永远挂起。
+  assert.equal(typeof posted[0], "object");
+  assert.notEqual(posted[0], null);
   ok("基本往返：invoke 返回 data，payload 为 {id, cmd, args}");
 }
 

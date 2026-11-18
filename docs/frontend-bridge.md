@@ -21,11 +21,15 @@
 ## 协议
 
 ```
-JS -> C : chrome.webview.postMessage(JSON.stringify({ id, cmd, args }))
+JS -> C : chrome.webview.postMessage({ id, cmd, args })
 C  -> JS: window.__cdc_onMessage({ id, ok: true,  data })   // 成功
 C  -> JS: window.__cdc_onMessage({ id, ok: false, error })  // 失败，error 为字符串
 C  -> JS: window.__cdc_onMessage({ event, data })           // 推送，无 id
 ```
+
+> 直接 post 对象，不能包 `JSON.stringify`：宿主读的是 `WebMessageAsJson`，
+> 字符串会被它再包一层引号，信封解析失败且无回包，全部调用永远挂起
+> （v0.1.0 的 bug；见 `web/src/api/bridge.ts` 文件头注释）。
 
 - `id` 是前端自增整数；C 侧原样带回，前端按 id 配对 Promise。
 - `args` 省略时前端发 `{}`；后端 handler 只取自己需要的键，忽略多余字段。

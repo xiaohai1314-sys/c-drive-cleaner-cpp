@@ -8,8 +8,10 @@ C 桥的命令名、参数名、返回值 JSON 形态与 Tauri 版**一字不改
 
 约定：
 
-- JS → C：`chrome.webview.postMessage(JSON.stringify({ id, cmd, args }))`，
-  `args` 省略时按 `{}` 处理（Tauri 侧无参命令本来就不传 args）。
+- JS → C：`chrome.webview.postMessage({ id, cmd, args })`，直接 post
+  对象；`args` 省略时按 `{}` 处理（Tauri 侧无参命令本来就不传 args）。
+  注意：不能包 `JSON.stringify`——宿主读的是 `WebMessageAsJson`，
+  字符串会被它再包一层引号，信封解析失败且无回包（v0.1.0 的 bug）。
 - C → JS：`window.__cdc_onMessage({ id, ok: true, data })` 或
   `{ id, ok: false, error }`。`data` 是命令返回值的 JSON（与 Tauri
   `invoke` 的返回值一致）；失败时 `error` 为字符串（对应 Rust 的

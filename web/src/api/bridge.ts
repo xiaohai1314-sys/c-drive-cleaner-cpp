@@ -2,9 +2,14 @@
  * C 宿主（WebView2 原生 COM 桥）的前端封装，与 Tauri `invoke` 同签名。
  *
  * 协议（见 docs/bridge-commands.md）：
- *   JS -> C : chrome.webview.postMessage(JSON.stringify({ id, cmd, args }))
+ *   JS -> C : chrome.webview.postMessage({ id, cmd, args })
  *   C  -> JS: window.__cdc_onMessage({ id, ok, data | error })
  *   C  -> JS: window.__cdc_onMessage({ event, data })（推送，无 id）
+ *
+ * 必须直接 post 对象，不能包 JSON.stringify：宿主读的是
+ * WebMessageAsJson，字符串会被它再包一层引号（postMessage('x') 读到
+ * 的是 '"x"'），宿主的信封解析要求以 '{' 开头，解析失败且无回包，
+ * 所有调用会永远挂起。v0.1.0 就是这么坏的（见 tests/test_bridge.mjs）。
  *
  * 调用方（各页面 / store / composable）继续从 `api/tauri` import `invoke`，
  * 那里会优先走这里，Tauri 环境则降级到 `__TAURI__.core.invoke`。
@@ -12,7 +17,9 @@
  */
 
 interface ChromeWebview {
-  postMessage?: (message: string) => void;
+  // 直接 post 对象（见文件头注释）：包 JSON.stringify 会被 WebMessageAsJson
+  // 再包一层引号，宿主解析不到信封。
+  postMessage?: (message: unknown) => void;
 }
 
 interface BridgeWindow {
@@ -49,7 +56,7 @@ function bridgeWindow(): BridgeWindow {
   return window as unknown as BridgeWindow;
 }
 
-function postMessageFn(): ((message: string) => void) | undefined {
+function postMessageFn(): ((message: unknown) => void) | undefined {
   return bridgeWindow().chrome?.webview?.postMessage;
 }
 
@@ -150,7 +157,9 @@ export async function invoke<T>(
       cmd,
     });
     try {
-      post(JSON.stringify({ id, cmd, args: args ?? {} }));
+      // 直接 post 对象：WebMessageAsJson 原样返回对象 JSON；发字符串会被
+      // 再包一层引号，宿主解析失败且无回包（v0.1.0 的 bug）。
+      post({ id, cmd, args: args ?? {} });
     } catch (error) {
       pending.delete(id);
       if (timer !== undefined) window.clearTimeout(timer);
