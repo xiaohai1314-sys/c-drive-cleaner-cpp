@@ -32,6 +32,7 @@
 #endif
 
 #include <shlwapi.h>
+#include <stdlib.h>
 #include <string.h>
 #include <wctype.h>
 #include <windows.h>
@@ -626,11 +627,23 @@ void create_controller() {
 // ---------------------------------------------------------------------------
 // 宿主命令 window_minimize / window_maximize / window_close。
 // ---------------------------------------------------------------------------
+// strdup 的可移植替代：MSVC 把 strdup 标为 C4996（要用 _strdup），而
+// MinGW/glibc 没有 _strdup；malloc + memcpy 两边都干净，与 gui.cpp 的
+// gui_strdup 同路（_CRT_SECURE_NO_WARNINGS 管不到 POSIX 名，
+// 那是 _CRT_NONSTDC_NO_WARNINGS 的事）。
+char *host_strdup(const char *s) {
+  if (!s) return nullptr;
+  size_t n = strlen(s) + 1;
+  char *p = (char *)malloc(n);
+  if (p) memcpy(p, s, n);
+  return p;
+}
+
 int window_minimize(const char *args_json, char **out_json, char **out_error) {
   (void)args_json;
   (void)out_error;
   ShowWindow(g_hwnd, SW_MINIMIZE);
-  *out_json = strdup("null");
+  *out_json = host_strdup("null");
   return *out_json ? 0 : -1;
 }
 
@@ -638,7 +651,7 @@ int window_maximize(const char *args_json, char **out_json, char **out_error) {
   (void)args_json;
   (void)out_error;
   ShowWindow(g_hwnd, IsZoomed(g_hwnd) ? SW_RESTORE : SW_MAXIMIZE);
-  *out_json = strdup("null");
+  *out_json = host_strdup("null");
   return *out_json ? 0 : -1;
 }
 
@@ -646,7 +659,7 @@ int window_close(const char *args_json, char **out_json, char **out_error) {
   (void)args_json;
   (void)out_error;
   PostMessageW(g_hwnd, WM_CLOSE, 0, 0);
-  *out_json = strdup("null");
+  *out_json = host_strdup("null");
   return *out_json ? 0 : -1;
 }
 
