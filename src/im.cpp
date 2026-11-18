@@ -535,7 +535,7 @@ void hex_preview(const uint8_t *data, size_t n, std::string &out) {
 /* UTF-8 lossy 解码：非法序列按 U+FFFD 计（与 Rust from_utf8_lossy 的
  * maximal-subpart 替换基本一致：每段非法子序列一个 U+FFFD）。 */
 void utf8_lossy_append(std::string &out, const uint8_t *s, size_t n) {
-    static const char REPL[3] = {(char)0xEF, (char)0xBF, (char)0xBD};
+    static const unsigned char REPL[3] = {0xEF, 0xBF, 0xBD};
     size_t i = 0;
     while (i < n) {
         uint8_t c = s[i];
@@ -560,7 +560,7 @@ void utf8_lossy_append(std::string &out, const uint8_t *s, size_t n) {
             cp = c & 0x07;
             min_cp = 0x10000;
         } else {
-            out.append(REPL, 3);
+            out.append(reinterpret_cast<const char *>(REPL), 3);
             i++;
             continue;
         }
@@ -579,7 +579,7 @@ void utf8_lossy_append(std::string &out, const uint8_t *s, size_t n) {
         } else {
             /* 非法：整个 maximal subpart（lead + 已有的后续字节）换一个
              * U+FFFD；若一个后续字节都没有，只消费 lead 字节。 */
-            out.append(REPL, 3);
+            out.append(reinterpret_cast<const char *>(REPL), 3);
             i += 1 + valid;
         }
     }
