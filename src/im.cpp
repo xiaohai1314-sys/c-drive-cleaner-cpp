@@ -177,14 +177,12 @@ std::string trim_copy(std::string_view s) {
  * 输出经 CP_ACP 转 UTF-8（比 Rust 的 from_utf8_lossy 更准：中文路径
  * 不会变 U+FFFD）。 */
 std::optional<std::string> wechat_registry_path_value() {
-    auto reg = cdc_system32_path("reg.exe");
+    std::string reg = system32_path("reg.exe");
     std::string so, se;
     long code = -1;
     Error e;
-    int rc = run_command(reg ? reg : std::string("reg.exe"),
-                         "query HKCU\\Software\\Tencent\\WeChat /v FileSavePath", true, &so,
-                         &se, &code, &e);
-    free(reg);
+    int rc = run_command(reg, "query HKCU\\Software\\Tencent\\WeChat /v FileSavePath",
+                         true, &so, &se, &code, &e);
     if (rc != kOk || code != 0 || so.empty())
         return std::nullopt;
     char *save = NULL;

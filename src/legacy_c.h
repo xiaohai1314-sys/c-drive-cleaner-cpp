@@ -328,3 +328,68 @@ int cdc_im_clean(const char *kind, const char **kinds, size_t nkinds,
                  const char **paths, size_t npaths, int has_paths,
                  cdc_delete_report_t *out, cdc_err_t *err);
 void cdc_im_set_hooks(const cdc_hooks_t *hooks);
+
+// ---- system ----
+char *cdc_system32_path(const char *name);
+int cdc_fixed_drives(char ***out, size_t *out_n, cdc_err_t *err);
+int cdc_drive_free_space(const char *drive, uint64_t *out_free,
+                         uint64_t *out_total, cdc_err_t *err);
+int cdc_reveal_in_explorer(const char *path, cdc_err_t *err);
+int cdc_open_path(const char *path, cdc_err_t *err);
+
+typedef struct {
+    int enabled;
+    uint64_t size;
+    char *path;
+    char *description;
+} cdc_hiber_info_t;
+
+void cdc_hiber_info_free(cdc_hiber_info_t *info);
+int cdc_query_hiber(cdc_hiber_info_t *out, cdc_err_t *err);
+int cdc_set_hiber(const char *mode, char **out_msg, cdc_err_t *err);
+int cdc_empty_all_recycle_bins(cdc_err_t *err);
+
+typedef struct {
+    char *key;
+    char *name;
+    char *describe;
+    uint64_t size;
+    uint64_t count;
+    int safe_to_clean;
+    int is_command;
+} cdc_system_item_t;
+
+void cdc_system_items_free(cdc_system_item_t *items, size_t n);
+int cdc_scan_system_deep(cdc_system_item_t **out, size_t *out_n,
+                         cdc_err_t *err);
+int cdc_clean_system_item(const char *key, uint64_t *out_freed,
+                          uint64_t *out_count, char **out_msg,
+                          cdc_err_t *err);
+void cdc_system_set_hooks(const cdc_hooks_t *hooks);
+
+typedef struct {
+    char *letter;
+    uint64_t free_bytes;
+    uint64_t total_bytes;
+} cdc_drive_target_t;
+
+typedef struct {
+    char *source;
+    int exists;
+    uint64_t size;
+    uint64_t file_count;
+    int is_junction;
+    cdc_drive_target_t *targets;
+    size_t ntargets;
+} cdc_move_analysis_t;
+
+void cdc_move_analysis_free(cdc_move_analysis_t *a);
+int cdc_analyze_im_migration(const char *kind, cdc_move_analysis_t *out,
+                             cdc_err_t *err);
+void cdc_recover_pending_move(void);
+int cdc_execute_im_migration(const char *source, const char *target_dir,
+                             const char *kind, char **out_msg,
+                             cdc_err_t *err);
+int cdc_safe_for_quoted_cmd_path(const char *path);
+int cdc_valid_recovery_paths(const char *source, const char *backup,
+                             const char **allowed_roots, size_t nroots);

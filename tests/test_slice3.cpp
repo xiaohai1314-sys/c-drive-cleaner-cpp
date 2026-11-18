@@ -358,66 +358,60 @@ static void test_im_thumbnail_preview(void) {
 /* ---------------- system 纯函数（对照 Rust system.rs tests） ---------------- */
 
 static void test_system_pure(void) {
-    CHECK(cdc_safe_for_quoted_cmd_path("D:\\Data folder\\WeChat"), "quoted ok plain");
-    CHECK(cdc_safe_for_quoted_cmd_path("D:\\Data & files\\WeChat"), "quoted ok &");
-    CHECK(!cdc_safe_for_quoted_cmd_path("D:\\Data%TEMP%\\WeChat"), "quoted rejects percent");
-    CHECK(!cdc_safe_for_quoted_cmd_path("D:\\Data\\\"quoted\""), "quoted rejects quote");
-    CHECK(!cdc_safe_for_quoted_cmd_path("D:\\Data\\line\nnext"), "quoted rejects newline");
-    CHECK(!cdc_safe_for_quoted_cmd_path(""), "quoted rejects empty");
-    const char *roots[1] = { "C:\\Users\\u\\Documents\\WeChat Files" };
-    CHECK(cdc_valid_recovery_paths("C:\\Users\\u\\Documents\\WeChat Files",
-                                   "C:\\Users\\u\\Documents\\WeChat Files_backup_20261116_200000",
-                                   roots, 1),
+    CHECK(cdc::safe_for_quoted_cmd_path("D:\\Data folder\\WeChat"), "quoted ok plain");
+    CHECK(cdc::safe_for_quoted_cmd_path("D:\\Data & files\\WeChat"), "quoted ok &");
+    CHECK(!cdc::safe_for_quoted_cmd_path("D:\\Data%TEMP%\\WeChat"), "quoted rejects percent");
+    CHECK(!cdc::safe_for_quoted_cmd_path("D:\\Data\\\"quoted\""), "quoted rejects quote");
+    CHECK(!cdc::safe_for_quoted_cmd_path("D:\\Data\\line\nnext"), "quoted rejects newline");
+    CHECK(!cdc::safe_for_quoted_cmd_path(""), "quoted rejects empty");
+    std::vector<std::string> roots = {"C:\\Users\\u\\Documents\\WeChat Files"};
+    CHECK(cdc::valid_recovery_paths("C:\\Users\\u\\Documents\\WeChat Files",
+                                    "C:\\Users\\u\\Documents\\WeChat Files_backup_20261116_200000",
+                                    roots),
           "recovery valid exact");
-    CHECK(!cdc_valid_recovery_paths("C:\\Users\\u\\Documents\\WeChat Files\\nested",
-                                    "C:\\Users\\u\\Documents\\WeChat Files\\nested_backup_20261116_200000",
-                                    roots, 1),
+    CHECK(!cdc::valid_recovery_paths("C:\\Users\\u\\Documents\\WeChat Files\\nested",
+                                     "C:\\Users\\u\\Documents\\WeChat Files\\nested_backup_20261116_200000",
+                                     roots),
           "recovery rejects nested source");
-    CHECK(!cdc_valid_recovery_paths("C:\\Users\\u\\Documents\\WeChat Files",
-                                    "D:\\elsewhere\\WeChat Files_backup_20261116_200000",
-                                    roots, 1),
+    CHECK(!cdc::valid_recovery_paths("C:\\Users\\u\\Documents\\WeChat Files",
+                                     "D:\\elsewhere\\WeChat Files_backup_20261116_200000",
+                                     roots),
           "recovery rejects different parent");
-    CHECK(!cdc_valid_recovery_paths("C:\\Users\\u\\Documents\\WeChat Files",
-                                    "C:\\Users\\u\\Documents\\WeChat Files_backup_20261116-200000",
-                                    roots, 1),
+    CHECK(!cdc::valid_recovery_paths("C:\\Users\\u\\Documents\\WeChat Files",
+                                     "C:\\Users\\u\\Documents\\WeChat Files_backup_20261116-200000",
+                                     roots),
           "recovery rejects bad stamp");
-    CHECK(!cdc_valid_recovery_paths("C:\\Windows\\System32",
-                                    "C:\\Windows\\System32_backup_20261116_200000",
-                                    roots, 1),
+    CHECK(!cdc::valid_recovery_paths("C:\\Windows\\System32",
+                                     "C:\\Windows\\System32_backup_20261116_200000",
+                                     roots),
           "recovery rejects system source");
     /* hiber / 固定磁盘 / 系统清理项（Linux 下为降级行为）。 */
-    cdc_hiber_info_t hi;
-    CHECK(cdc_query_hiber(&hi, NULL) == CDC_OK, "query_hiber ok");
-    CHECK(hi.path && strstr(hi.path, "hiberfil.sys") != NULL, "hiber path ends hiberfil.sys");
-    cdc_hiber_info_free(&hi);
-    char **drives = NULL;
-    size_t ndrives = 0;
-    CHECK(cdc_fixed_drives(&drives, &ndrives, NULL) == CDC_OK && ndrives >= 1,
+    cdc::HiberInfo hi;
+    CHECK(cdc::query_hiber(&hi, nullptr) == cdc::kOk, "query_hiber ok");
+    CHECK(hi.path.find("hiberfil.sys") != std::string::npos, "hiber path ends hiberfil.sys");
+    std::vector<std::string> drives;
+    CHECK(cdc::fixed_drives(&drives, nullptr) == cdc::kOk && drives.size() >= 1,
           "fixed_drives >= 1");
-    if (drives && ndrives > 0)
-        CHECK(strcmp(drives[0], "C:\\") == 0, "linux fixed_drives fallback C:\\");
-    cdc_strvec_free(drives, ndrives);
-    cdc_system_item_t *items = NULL;
-    size_t nitems = 0;
-    CHECK(cdc_scan_system_deep(&items, &nitems, NULL) == CDC_OK, "scan_system_deep ok");
+    if (!drives.empty())
+        CHECK(drives[0] == "C:\\", "linux fixed_drives fallback C:\\");
+    std::vector<cdc::SystemItem> items;
+    CHECK(cdc::scan_system_deep(&items, nullptr) == cdc::kOk, "scan_system_deep ok");
     int has_dism = 0, has_dumps = 0;
-    for (size_t i = 0; i < nitems; i++) {
-        if (strcmp(items[i].key, "sys_dism_winsxs") == 0) has_dism = 1;
-        if (strcmp(items[i].key, "sys_crash_dumps") == 0) has_dumps = 1;
+    for (auto &it : items) {
+        if (it.key == "sys_dism_winsxs") has_dism = 1;
+        if (it.key == "sys_crash_dumps") has_dumps = 1;
     }
     CHECK(has_dism && has_dumps, "scan_system_deep has dism + crash dumps");
-    cdc_system_items_free(items, nitems);
-    cdc_err_t e;
-    CHECK(cdc_set_hiber("bogus", NULL, &e) == CDC_ERR_INVALID_ARG, "set_hiber bogus rejected");
-    CHECK(cdc_reveal_in_explorer("/nonexistent-path-xyz", &e) == CDC_ERR_NOT_FOUND,
+    cdc::Error e;
+    CHECK(cdc::set_hiber("bogus", nullptr, &e) == cdc::kErrInvalidArg, "set_hiber bogus rejected");
+    CHECK(cdc::reveal_in_explorer("/nonexistent-path-xyz", &e) == cdc::kErrNotFound,
           "reveal nonexistent -> NOT_FOUND");
-    CHECK(cdc_clean_system_item("no_such_key", NULL, NULL, NULL, &e) == CDC_ERR_INVALID_ARG,
+    CHECK(cdc::clean_system_item("no_such_key", nullptr, nullptr, nullptr, &e) == cdc::kErrInvalidArg,
           "clean_system_item unknown key rejected");
     /* im 迁移分析：无根目录时 source 为空、exists 为假。 */
-    cdc_move_analysis_t ma;
-    CHECK(cdc_analyze_im_migration("wechat", &ma, NULL) == CDC_OK, "analyze_im_migration ok");
-    CHECK(!ma.exists && ma.source && ma.source[0] == '\0', "analyze no roots -> empty source");
-    cdc_move_analysis_free(&ma);
+    cdc::MoveAnalysis ma;
+    CHECK(cdc::analyze_im_migration("wechat", &ma, nullptr) == cdc::kOk, "analyze_im_migration ok");
+    CHECK(!ma.exists && ma.source.empty(), "analyze no roots -> empty source");
 }
 
 /* ---------------- privacy 扫描结构（空环境） ---------------- */

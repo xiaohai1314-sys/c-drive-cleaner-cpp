@@ -15,6 +15,7 @@
 #include "indextask.h"
 #include "rules.h"
 #include "im.h"
+#include "system.h"
 
 void cdc_err_init(cdc_err_t *err) { cdc::err_init(err); }
 void cdc_err_set(cdc_err_t *err, int code, const char *fmt, ...) {
@@ -1103,3 +1104,187 @@ int cdc_im_clean(const char *kind, const char **kinds, size_t nkinds,
 }
 
 void cdc_im_set_hooks(const cdc_hooks_t *hooks) { cdc::im_set_hooks(hooks); }
+
+// ---- system 转发 ----
+char *cdc_system32_path(const char *name) {
+    return dup_c(cdc::system32_path(name ? name : ""));
+}
+
+int cdc_fixed_drives(char ***out, size_t *out_n, cdc_err_t *err) {
+    if (out) *out = NULL;
+    if (out_n) *out_n = 0;
+    std::vector<std::string> drives;
+    int rc = cdc::fixed_drives(&drives, err);
+    if (rc != CDC_OK) return rc;
+    char **arr = (char **)calloc(drives.size(), sizeof(char *));
+    if (!arr) return CDC_ERR_NOMEM;
+    for (size_t i = 0; i < drives.size(); i++) {
+        arr[i] = dup_c(drives[i]);
+        if (!arr[i]) {
+            cdc_strvec_free(arr, i);
+            return CDC_ERR_NOMEM;
+        }
+    }
+    if (out) *out = arr;
+    if (out_n) *out_n = drives.size();
+    return CDC_OK;
+}
+
+int cdc_drive_free_space(const char *drive, uint64_t *out_free, uint64_t *out_total,
+                         cdc_err_t *err) {
+    return cdc::drive_free_space(drive ? drive : "", out_free, out_total, err);
+}
+
+int cdc_reveal_in_explorer(const char *path, cdc_err_t *err) {
+    return cdc::reveal_in_explorer(path ? path : "", err);
+}
+
+int cdc_open_path(const char *path, cdc_err_t *err) {
+    return cdc::open_path(path ? path : "", err);
+}
+
+void cdc_hiber_info_free(cdc_hiber_info_t *info) {
+    if (!info) return;
+    free(info->path);
+    free(info->description);
+    info->path = NULL;
+    info->description = NULL;
+}
+
+int cdc_query_hiber(cdc_hiber_info_t *out, cdc_err_t *err) {
+    if (!out) return CDC_ERR_INVALID_ARG;
+    cdc::HiberInfo hi;
+    int rc = cdc::query_hiber(&hi, err);
+    if (rc != CDC_OK) return rc;
+    out->enabled = hi.enabled ? 1 : 0;
+    out->size = hi.size;
+    out->path = dup_c(hi.path);
+    out->description = dup_c(hi.description);
+    return CDC_OK;
+}
+
+int cdc_set_hiber(const char *mode, char **out_msg, cdc_err_t *err) {
+    if (out_msg) *out_msg = NULL;
+    std::string msg;
+    int rc = cdc::set_hiber(mode ? mode : "", out_msg ? &msg : nullptr, err);
+    if (rc != CDC_OK) return rc;
+    if (out_msg) *out_msg = dup_c(msg);
+    return CDC_OK;
+}
+
+int cdc_empty_all_recycle_bins(cdc_err_t *err) {
+    return cdc::empty_all_recycle_bins(err);
+}
+
+void cdc_system_items_free(cdc_system_item_t *items, size_t n) {
+    if (!items) return;
+    for (size_t i = 0; i < n; i++) {
+        free(items[i].key);
+        free(items[i].name);
+        free(items[i].describe);
+    }
+    free(items);
+}
+
+int cdc_scan_system_deep(cdc_system_item_t **out, size_t *out_n, cdc_err_t *err) {
+    if (out) *out = NULL;
+    if (out_n) *out_n = 0;
+    std::vector<cdc::SystemItem> items;
+    int rc = cdc::scan_system_deep(&items, err);
+    if (rc != CDC_OK) return rc;
+    if (items.empty()) return CDC_OK;
+    auto *arr = (cdc_system_item_t *)calloc(items.size(), sizeof(cdc_system_item_t));
+    if (!arr) return CDC_ERR_NOMEM;
+    for (size_t i = 0; i < items.size(); i++) {
+        arr[i].key = dup_c(items[i].key);
+        arr[i].name = dup_c(items[i].name);
+        arr[i].describe = dup_c(items[i].describe);
+        arr[i].size = items[i].size;
+        arr[i].count = items[i].count;
+        arr[i].safe_to_clean = items[i].safe_to_clean ? 1 : 0;
+        arr[i].is_command = items[i].is_command ? 1 : 0;
+    }
+    if (out) *out = arr;
+    if (out_n) *out_n = items.size();
+    return CDC_OK;
+}
+
+int cdc_clean_system_item(const char *key, uint64_t *out_freed, uint64_t *out_count,
+                          char **out_msg, cdc_err_t *err) {
+    if (out_msg) *out_msg = NULL;
+    uint64_t freed = 0, count = 0;
+    std::string msg;
+    int rc = cdc::clean_system_item(key ? key : "", &freed, &count,
+                                    out_msg ? &msg : nullptr, err);
+    if (rc != CDC_OK) return rc;
+    if (out_freed) *out_freed = freed;
+    if (out_count) *out_count = count;
+    if (out_msg) *out_msg = dup_c(msg);
+    return CDC_OK;
+}
+
+void cdc_system_set_hooks(const cdc_hooks_t *hooks) { cdc::system_set_hooks(hooks); }
+
+void cdc_move_analysis_free(cdc_move_analysis_t *a) {
+    if (!a) return;
+    free(a->source);
+    for (size_t i = 0; i < a->ntargets; i++) free(a->targets[i].letter);
+    free(a->targets);
+    a->source = NULL;
+    a->targets = NULL;
+    a->ntargets = 0;
+}
+
+int cdc_analyze_im_migration(const char *kind, cdc_move_analysis_t *out, cdc_err_t *err) {
+    if (!out) return CDC_ERR_INVALID_ARG;
+    cdc::MoveAnalysis ma;
+    int rc = cdc::analyze_im_migration(kind ? kind : "", &ma, err);
+    if (rc != CDC_OK) return rc;
+    out->source = dup_c(ma.source);
+    out->exists = ma.exists ? 1 : 0;
+    out->size = ma.size;
+    out->file_count = ma.file_count;
+    out->is_junction = ma.is_junction ? 1 : 0;
+    out->targets = NULL;
+    out->ntargets = 0;
+    if (!ma.targets.empty()) {
+        auto *arr = (cdc_drive_target_t *)calloc(ma.targets.size(),
+                                                 sizeof(cdc_drive_target_t));
+        if (!arr) return CDC_ERR_NOMEM;
+        for (size_t i = 0; i < ma.targets.size(); i++) {
+            arr[i].letter = dup_c(ma.targets[i].letter);
+            arr[i].free_bytes = ma.targets[i].free_bytes;
+            arr[i].total_bytes = ma.targets[i].total_bytes;
+        }
+        out->targets = arr;
+        out->ntargets = ma.targets.size();
+    }
+    return CDC_OK;
+}
+
+void cdc_recover_pending_move(void) { cdc::recover_pending_move(); }
+
+int cdc_execute_im_migration(const char *source, const char *target_dir, const char *kind,
+                             char **out_msg, cdc_err_t *err) {
+    if (out_msg) *out_msg = NULL;
+    std::string msg;
+    int rc = cdc::execute_im_migration(source ? source : "", target_dir ? target_dir : "",
+                                       kind ? kind : "", out_msg ? &msg : nullptr, err);
+    if (rc != CDC_OK) return rc;
+    if (out_msg) *out_msg = dup_c(msg);
+    return CDC_OK;
+}
+
+int cdc_safe_for_quoted_cmd_path(const char *path) {
+    return cdc::safe_for_quoted_cmd_path(path ? path : "") ? 1 : 0;
+}
+
+int cdc_valid_recovery_paths(const char *source, const char *backup,
+                             const char **allowed_roots, size_t nroots) {
+    if (!source || !backup) return 0;
+    std::vector<std::string> roots;
+    roots.reserve(nroots);
+    for (size_t i = 0; i < nroots; i++)
+        roots.emplace_back(allowed_roots[i] ? allowed_roots[i] : "");
+    return cdc::valid_recovery_paths(source, backup, roots) ? 1 : 0;
+}
