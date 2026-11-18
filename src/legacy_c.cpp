@@ -10,6 +10,7 @@
 #include "util.h"
 #include "timeutil.h"
 #include "logs.h"
+#include "shred.h"
 
 void cdc_err_init(cdc_err_t *err) { cdc::err_init(err); }
 void cdc_err_set(cdc_err_t *err, int code, const char *fmt, ...) {
@@ -470,6 +471,58 @@ int cdc_log_read(const char *name, char **out_text, cdc_err_t *err) {
     if (!*out_text) {
         cdc::err_set(err, CDC_ERR_NOMEM, "out of memory");
         return CDC_ERR_NOMEM;
+    }
+    return CDC_OK;
+}
+
+// ---- shred 转发 ----
+void cdc_shred_report_free(cdc_shred_report_t *r) {
+    if (!r) return;
+    for (size_t i = 0; i < r->nerrors; i++)
+        free(r->errors[i]);
+    free(r->errors);
+    r->errors = NULL;
+    r->nerrors = 0;
+}
+void cdc_shred_set_hooks(const cdc_hooks_t *hooks) { cdc::shred_set_hooks(hooks); }
+int cdc_shred_paths(const char **paths, size_t npaths, uint32_t passes,
+                    cdc_shred_report_t *out, cdc_err_t *err) {
+    if (!out) {
+        cdc::err_set(err, CDC_ERR_INVALID_ARG, "out is NULL");
+        return CDC_ERR_INVALID_ARG;
+    }
+    std::vector<std::string> v;
+    v.reserve(npaths);
+    for (size_t i = 0; i < npaths; i++)
+        v.emplace_back(paths && paths[i] ? paths[i] : "");
+    cdc::ShredReport rep;
+    int rc = cdc::shred_paths(v, passes, &rep, err);
+    if (rc != CDC_OK)
+        return rc;
+    out->freed = rep.freed;
+    out->files_ok = rep.files_ok;
+    out->files_failed = rep.files_failed;
+    out->finished = rep.finished;
+    out->errors = NULL;
+    out->nerrors = 0;
+    if (!rep.errors.empty()) {
+        out->errors = (char **)malloc(rep.errors.size() * sizeof(char *));
+        if (!out->errors) {
+            cdc::err_set(err, CDC_ERR_NOMEM, "out of memory");
+            return CDC_ERR_NOMEM;
+        }
+        for (size_t i = 0; i < rep.errors.size(); i++) {
+            out->errors[i] = dup_c(rep.errors[i]);
+            if (!out->errors[i]) {
+                for (size_t j = 0; j < i; j++)
+                    free(out->errors[j]);
+                free(out->errors);
+                out->errors = NULL;
+                cdc::err_set(err, CDC_ERR_NOMEM, "out of memory");
+                return CDC_ERR_NOMEM;
+            }
+        }
+        out->nerrors = rep.errors.size();
     }
     return CDC_OK;
 }

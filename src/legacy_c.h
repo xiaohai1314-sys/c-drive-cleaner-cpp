@@ -9,6 +9,8 @@
 #include <cstdint>
 #include <cwchar>
 
+#include "cdc_hooks.h"
+
 namespace cdc {
 struct Error;
 }
@@ -168,3 +170,20 @@ typedef struct {
 int cdc_logs_list(cdc_log_entry_t **out, size_t *out_n, cdc_err_t *err);
 void cdc_logs_list_free(cdc_log_entry_t *entries, size_t n);
 int cdc_log_read(const char *name, char **out_text, cdc_err_t *err);
+
+// ---- shred ----
+#define CDC_SHRED_MAX_PASSES 3u
+
+typedef struct {
+    uint64_t freed;
+    uint64_t files_ok;
+    uint64_t files_failed;
+    uint64_t finished; /* 成功清空的目录数 */
+    char **errors;
+    size_t nerrors;
+} cdc_shred_report_t;
+
+void cdc_shred_report_free(cdc_shred_report_t *r);
+void cdc_shred_set_hooks(const cdc_hooks_t *hooks);
+int cdc_shred_paths(const char **paths, size_t npaths, uint32_t passes,
+                    cdc_shred_report_t *out, cdc_err_t *err);

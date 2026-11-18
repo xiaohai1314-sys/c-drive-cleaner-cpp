@@ -483,16 +483,16 @@ static void test_linux_degradation(void) {
     char f1[300];
     snprintf(f1, sizeof(f1), "%s/a.txt", base);
     CHECK(write_file(f1, "data", 4), "create Linux degradation fixture");
+    const char *paths[1] = {f1};
     /* 粉碎：Linux 下不删文件，只计失败。 */
-    cdc_shred_report_t rep;
-    const char *paths[1] = { f1 };
-    cdc_err_t e;
-    CHECK(cdc_shred_paths(paths, 1, 1, &rep, &e) == CDC_OK, "shred rc ok");
+    cdc::ShredReport rep;
+    cdc::Error e;
+    CHECK(cdc::shred_paths(std::vector<std::string>{f1}, 1, &rep, &e) == cdc::kOk,
+          "shred rc ok");
     CHECK(rep.files_failed == 1 && rep.files_ok == 0, "shred linux fails gracefully");
     FILE *chk = fopen(f1, "r");
     CHECK(chk != NULL, "shred linux leaves file");
     if (chk) fclose(chk);
-    cdc_shred_report_free(&rep);
     /* 回收站：Linux 下全部失败，不做永久删除。 */
     std::vector<std::string> failed = cdc::send_to_recycle(paths);
     CHECK(failed.size() == 1 && failed[0] == f1, "recycle failed list names the file");
